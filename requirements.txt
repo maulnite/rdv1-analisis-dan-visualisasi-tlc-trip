@@ -1,0 +1,12 @@
+pandas
+pyarrow
+duckdb
+requests
+python-dotenv
+streamlit
+plotly
+folium
+streamlit-folium
+geopandas
+scikit-learn
+matplotlib

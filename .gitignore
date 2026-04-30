@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+env/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Data files
+data/raw/*
+data/external/*
+data/processed/*
+data/curated/*
+
+# Keep folder structure
+!data/raw/.gitkeep
+!data/external/.gitkeep
+!data/processed/.gitkeep
+!data/curated/.gitkeep
+
+# Airflow logs
+logs/*
+!logs/.gitkeep
+
+# Environment
+.env
+
+# OS / Editor
+.DS_Store
+Thumbs.db
+.vscode/
