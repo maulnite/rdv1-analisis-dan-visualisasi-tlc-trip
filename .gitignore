@@ -33,3 +33,5 @@ logs/*
 .DS_Store
 Thumbs.db
 .vscode/
+
+docker-compose.backup.yaml
