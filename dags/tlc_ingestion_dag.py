@@ -24,8 +24,9 @@ def tlc_ingestion_pipeline():
     @task
     def download_tlc_trip_data():
         from src.extract_tlc import download_tlc_data
+        from src.pipeline_config import MONTHS, TAXI_TYPE
 
-        return download_tlc_data(months=["2025-01"], taxi_type="yellow")
+        return download_tlc_data(months=MONTHS, taxi_type=TAXI_TYPE)
 
     @task
     def download_zone_lookup():
@@ -36,8 +37,9 @@ def tlc_ingestion_pipeline():
     @task
     def validate_outputs():
         from src.extract_tlc import validate_ingestion_outputs
+        from src.pipeline_config import MONTHS, TAXI_TYPE
 
-        validate_ingestion_outputs()
+        validate_ingestion_outputs(months=MONTHS, taxi_type=TAXI_TYPE)
 
     directories = prepare_directories()
     tlc_data = download_tlc_trip_data()

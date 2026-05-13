@@ -99,14 +99,19 @@ def download_taxi_zone_lookup() -> str:
     return str(file_path)
 
 
-def validate_ingestion_outputs() -> None:
+def validate_ingestion_outputs(
+    months: Iterable[str] = DEFAULT_MONTHS,
+    taxi_type: str = DEFAULT_TAXI_TYPE,
+) -> None:
     """
-    Validasi sederhana untuk memastikan file hasil ingestion sudah ada.
+    Validasi sederhana untuk memastikan semua file hasil ingestion sudah ada.
     """
-    expected_files = [
-        RAW_DIR / "yellow_tripdata_2025-01.parquet",
-        EXTERNAL_DIR / "taxi_zone_lookup.csv",
-    ]
+    expected_files = []
+
+    for month in months:
+        expected_files.append(RAW_DIR / f"{taxi_type}_tripdata_{month}.parquet")
+
+    expected_files.append(EXTERNAL_DIR / "taxi_zone_lookup.csv")
 
     missing_files = []
 
@@ -117,7 +122,10 @@ def validate_ingestion_outputs() -> None:
     if missing_files:
         raise FileNotFoundError(f"Missing ingestion output files: {missing_files}")
 
-    print("[CHECK] All ingestion output files exist.")
+    print("[CHECK] All ingestion output files exist:")
+    for file_path in expected_files:
+        size_mb = file_path.stat().st_size / (1024 * 1024)
+        print(f"  - {file_path} ({size_mb:.2f} MB)")
 
 
 if __name__ == "__main__":
