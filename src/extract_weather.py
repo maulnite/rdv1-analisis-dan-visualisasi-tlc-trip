@@ -65,6 +65,11 @@ def download_weather_data(months: Iterable[str]) -> str:
     output_path = EXTERNAL_DIR / f"weather_hourly_{month_label}.parquet"
     report_path = EXTERNAL_DIR / f"weather_report_{month_label}.json"
 
+    if output_path.exists() and output_path.stat().st_size > 0 and report_path.exists() and report_path.stat().st_size > 0:
+        print(f"[SKIP] Weather data already exists: {output_path}")
+        print(f"[SKIP] Weather report already exists: {report_path}")
+        return str(output_path)
+
     params = {
         "latitude": NYC_LATITUDE,
         "longitude": NYC_LONGITUDE,
@@ -88,7 +93,7 @@ def download_weather_data(months: Iterable[str]) -> str:
     print(f"[INFO] End date  : {end_date}")
     print(f"[INFO] Location  : lat={NYC_LATITUDE}, lon={NYC_LONGITUDE}")
 
-    response = requests.get(OPEN_METEO_ARCHIVE_URL, params=params, timeout=120)
+    response = requests.get(OPEN_METEO_ARCHIVE_URL, params=params, timeout=(30, 300))
     response.raise_for_status()
 
     payload = response.json()
