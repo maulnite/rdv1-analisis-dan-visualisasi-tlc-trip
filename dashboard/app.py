@@ -42,15 +42,23 @@ st.markdown(
         }
 
         .block-container {
-            padding-top: 1.5rem;
+            padding-top: 3.2rem !important;
             padding-bottom: 2rem;
         }
 
         .main-title {
             font-size: 2.2rem;
             font-weight: 800;
-            margin-bottom: 0.2rem;
+            line-height: 1.35;
+            margin-top: 0.25rem;
+            margin-bottom: 0.35rem;
+            padding-top: 0.25rem;
             color: #f8fafc;
+            overflow: visible;
+        }
+
+        header[data-testid="stHeader"] {
+            background: rgba(11, 18, 32, 0.95);
         }
 
         .subtitle {
