@@ -103,6 +103,20 @@ def tlc_full_pipeline():
 
         validate_weather_join_outputs(months=MONTHS)
 
+    @task
+    def build_analysis_marts():
+        from src.build_analysis_marts import build_analysis_marts
+        from src.pipeline_config import MONTHS
+
+        return build_analysis_marts(months=MONTHS)
+
+    @task
+    def validate_analysis_marts():
+        from src.build_analysis_marts import validate_analysis_marts
+        from src.pipeline_config import MONTHS
+
+        validate_analysis_marts(months=MONTHS)
+
     start = prepare_directories()
 
     tlc = download_tlc_trip_data()
@@ -121,6 +135,9 @@ def tlc_full_pipeline():
     weather_join = build_weather_join()
     weather_join_check = validate_weather_join()
 
+    analysis_marts = build_analysis_marts()
+    analysis_marts_check = validate_analysis_marts()
+
     start >> [tlc, zones, weather]
 
     [tlc, zones] >> ingestion_check
@@ -129,6 +146,7 @@ def tlc_full_pipeline():
 
     weather >> weather_check
     [curated_check, weather_check] >> weather_join >> weather_join_check
+    weather_join_check >> analysis_marts >> analysis_marts_check
 
 
 tlc_full_pipeline()
