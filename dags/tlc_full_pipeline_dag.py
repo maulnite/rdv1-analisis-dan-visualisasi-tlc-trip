@@ -21,11 +21,13 @@ def tlc_full_pipeline():
         from src.clean_tlc import ensure_processed_directory
         from src.build_curated import ensure_curated_directory
         from src.extract_weather import ensure_external_directory
+        from src.train_demand_prediction import ensure_ml_directory
 
         ensure_directories()
         ensure_processed_directory()
         ensure_curated_directory()
         ensure_external_directory()
+        ensure_ml_directory()
 
     @task
     def download_tlc_trip_data():
@@ -117,6 +119,21 @@ def tlc_full_pipeline():
 
         validate_analysis_marts(months=MONTHS)
 
+    @task
+    def train_demand_prediction():
+        from src.train_demand_prediction import train_demand_prediction_model
+        from src.pipeline_config import MONTHS
+
+        return train_demand_prediction_model(months=MONTHS)
+
+
+    @task
+    def validate_demand_prediction():
+        from src.train_demand_prediction import validate_demand_prediction_outputs
+        from src.pipeline_config import MONTHS
+
+        validate_demand_prediction_outputs(months=MONTHS)
+
     start = prepare_directories()
 
     tlc = download_tlc_trip_data()
@@ -138,6 +155,9 @@ def tlc_full_pipeline():
     analysis_marts = build_analysis_marts()
     analysis_marts_check = validate_analysis_marts()
 
+    demand_prediction = train_demand_prediction()
+    demand_prediction_check = validate_demand_prediction()
+
     start >> [tlc, zones, weather]
 
     [tlc, zones] >> ingestion_check
@@ -147,6 +167,7 @@ def tlc_full_pipeline():
     weather >> weather_check
     [curated_check, weather_check] >> weather_join >> weather_join_check
     weather_join_check >> analysis_marts >> analysis_marts_check
+    analysis_marts_check >> demand_prediction >> demand_prediction_check
 
 
 tlc_full_pipeline()
