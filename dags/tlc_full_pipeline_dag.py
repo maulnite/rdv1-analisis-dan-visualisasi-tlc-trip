@@ -134,6 +134,20 @@ def tlc_full_pipeline():
 
         validate_demand_prediction_outputs(months=MONTHS)
 
+    @task
+    def train_zone_clustering():
+        from src.pipeline_config import MONTHS
+        from src.train_zone_clustering import train_zone_weather_clustering
+
+        return train_zone_weather_clustering(months=MONTHS)
+
+    @task
+    def validate_zone_clustering():
+        from src.pipeline_config import MONTHS
+        from src.train_zone_clustering import validate_zone_weather_clustering_outputs
+
+        validate_zone_weather_clustering_outputs(months=MONTHS)
+
     start = prepare_directories()
 
     tlc = download_tlc_trip_data()
@@ -158,6 +172,9 @@ def tlc_full_pipeline():
     demand_prediction = train_demand_prediction()
     demand_prediction_check = validate_demand_prediction()
 
+    zone_clustering = train_zone_clustering()
+    zone_clustering_check = validate_zone_clustering()
+
     start >> [tlc, zones, weather]
 
     [tlc, zones] >> ingestion_check
@@ -167,7 +184,9 @@ def tlc_full_pipeline():
     weather >> weather_check
     [curated_check, weather_check] >> weather_join >> weather_join_check
     weather_join_check >> analysis_marts >> analysis_marts_check
+
     analysis_marts_check >> demand_prediction >> demand_prediction_check
+    analysis_marts_check >> zone_clustering >> zone_clustering_check
 
 
 tlc_full_pipeline()
