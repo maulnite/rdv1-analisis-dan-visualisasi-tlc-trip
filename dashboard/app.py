@@ -331,13 +331,13 @@ days = st.sidebar.selectbox(
 
 title_borough = "All Boroughs" if selected_borough == "All" else selected_borough
 
-BOROUGH_COLOR_MAP = {
-    "Manhattan": "#1f77b4",   # blue
-    "Brooklyn": "#ff7f0e",    # orange
-    "Queens": "#2ca02c",      # green
-    "Bronx": "#d62728",       # red
-    "Staten Island": "#9467bd",
-    "EWR": "#8c564b"
+BOROUGH_COLOR_MAP = { # Plotly default pallete
+    "Manhattan": "#636EFA",   # blue
+    "Brooklyn": "#EF553B",    # red
+    "Queens": "#00CC96",      # green
+    "Bronx": "#AB63FA",       # purple
+    "Staten Island": "#FFA15A", # orange
+    "EWR": "#19D3F3" # light blue
 }
 
 # ============================================================
@@ -784,6 +784,8 @@ with tab_zone:
                     non_clear_zone.sort_values("demand_lift_pct", ascending=False)
                     .head(top_n)
                 )
+                
+                # print(top_demand_lift)
 
                 fig_top_lift = px.bar(
                     top_demand_lift,
@@ -1268,6 +1270,7 @@ with tab_cluster:
                 x="total_weather_trips",
                 y="pickup_zone",
                 color="pickup_borough",
+                color_discrete_map=BOROUGH_COLOR_MAP,
                 orientation="h",
                 title=f"Top {top_n} High-Volume High Demand Lift Zones",
                 hover_data=existing_columns(
