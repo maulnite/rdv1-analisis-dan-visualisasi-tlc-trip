@@ -155,18 +155,28 @@ def read_json(path_str: str) -> dict:
         return json.load(file)
 
 
-def format_number(value: float) -> str:
+def format_number(value: float, decimal:bool = False) -> str:
     try:
-        return f"{float(value):,.0f}"
+        if decimal:
+            return f"{float(value):,.2f}"
+        else:
+            return f"{float(value):,.0f}"
     except Exception:
         return "0"
 
 
 def format_currency(value: float) -> str:
     try:
-        return f"${float(value):,.2f}"
+        if value >= 1_000_000_000:
+            return f"${value/1_000_000_000:.2f}B"
+        elif value >= 1_000_000:
+            return f"${value/1_000_000:.2f}M"
+        elif value >= 1_000:
+            return f"${value/1_000:.2f}K"
+        else:
+            return f"${value:,.2f}"
     except Exception:
-        return "$0.00"
+        return "$0.0"
 
 
 def weighted_average(df: pd.DataFrame, value_col: str, weight_col: str) -> float:
@@ -217,6 +227,13 @@ def update_chart_layout(fig, height: int | None = None):
         fig.update_layout(height=height)
 
     return fig
+
+
+def weighted_median(df, value_col, weight_col):
+    df_sorted = df.sort_values(value_col)
+    cumulative_weight = df_sorted[weight_col].cumsum()
+    cutoff = df_sorted[weight_col].sum() / 2.0
+    return df_sorted.loc[cumulative_weight >= cutoff, value_col].iloc[0]
 
 
 # ============================================================
@@ -419,29 +436,56 @@ tab_overview, tab_weather, tab_zone, tab_od, tab_prediction, tab_cluster = st.ta
 with tab_overview:
     st.subheader("Executive Overview")
     st.markdown(
-        f'<div class="section-note"><h6>Overview dari taxi demand, revenue, fare, dan duration perjalanan.</h6></div>',
-        unsafe_allow_html=True,
-    )
-    st.markdown(
-        f'<div class="section-note">Filter: <b>{title_borough}</b></div>',
+        f'<div class="section-note">Overview dari taxi demand, revenue, fare, dan durasi perjalanan untuk filter: <b>{title_borough}</b>.</div>',
         unsafe_allow_html=True,
     )
 
     overview_source = filtered_zone_summary.copy()
 
     total_trips = int(overview_source["total_trips"].sum()) if "total_trips" in overview_source.columns else 0
+    num_days = filtered_weather_hourly["pickup_date"].nunique()
+    avg_trips_per_day = total_trips / num_days if num_days > 0 else 0
     total_revenue = float(overview_source["total_revenue"].sum()) if "total_revenue" in overview_source.columns else 0.0
     avg_fare = weighted_average(overview_source, "avg_total_amount", "total_trips")
+    median_fare = weighted_median(overview_source, "avg_total_amount", "total_trips")
     avg_duration = weighted_average(overview_source, "avg_trip_duration_minutes", "total_trips")
+    median_duration = weighted_median(overview_source, "avg_trip_duration_minutes", "total_trips")
     avg_distance = weighted_average(overview_source, "avg_trip_distance", "total_trips")
+    median_distance = weighted_median(overview_source, "avg_trip_distance", "total_trips")
+    
+    rainy_share = (
+        (filtered_weather_hourly.groupby("pickup_date")["rain"].mean() > 0.1)
+        .mean() * 100
+    )
 
-    col1, col2, col3, col4, col5 = st.columns(5)
+    col1, col2, col3, col4, col5, col6 = st.columns(6)
 
-    col1.metric("Total Trips", format_number(total_trips))
-    col2.metric("Total Revenue", format_currency(total_revenue))
-    col3.metric("Avg Fare", format_currency(avg_fare))
-    col4.metric("Avg Duration", f"{avg_duration:.2f} min")
-    col5.metric("Avg Distance", f"{avg_distance:.2f} mi")
+    col1.metric(
+        "Total Trips", 
+        format_number(total_trips),
+        delta=f"Average: {format_number(avg_trips_per_day, True)}",
+        delta_color="off",
+    )
+    col2.metric("Total Revenue (USD)", format_currency(total_revenue))
+    col3.metric(
+        "Fare (USD)",
+        format_currency(avg_fare),
+        delta=f"Median: {format_currency(median_fare)}",
+        delta_color="off",
+    )
+    col4.metric(
+        "Duration",
+        f"{avg_duration:.2f} min",
+        delta=f"Median: {median_duration:.2f} min",
+        delta_color="off",
+    )
+    col5.metric(
+        "Distance",
+        f"{avg_distance:.2f} miles",
+        delta=f"Median: {median_distance:.2f} miles",
+        delta_color="off",
+    )
+    col6.metric("Rainy Day Share", f"{rainy_share:.1f}%")
 
     st.divider()
 
