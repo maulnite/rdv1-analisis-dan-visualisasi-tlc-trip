@@ -155,18 +155,28 @@ def read_json(path_str: str) -> dict:
         return json.load(file)
 
 
-def format_number(value: float) -> str:
+def format_number(value: float, decimal:bool = False) -> str:
     try:
-        return f"{float(value):,.0f}"
+        if decimal:
+            return f"{float(value):,.2f}"
+        else:
+            return f"{float(value):,.0f}"
     except Exception:
         return "0"
 
 
 def format_currency(value: float) -> str:
     try:
-        return f"${float(value):,.2f}"
+        if value >= 1_000_000_000:
+            return f"${value/1_000_000_000:.2f}B"
+        elif value >= 1_000_000:
+            return f"${value/1_000_000:.2f}M"
+        elif value >= 1_000:
+            return f"${value/1_000:.2f}K"
+        else:
+            return f"${value:,.2f}"
     except Exception:
-        return "$0.00"
+        return "$0.0"
 
 
 def weighted_average(df: pd.DataFrame, value_col: str, weight_col: str) -> float:
@@ -217,6 +227,13 @@ def update_chart_layout(fig, height: int | None = None):
         fig.update_layout(height=height)
 
     return fig
+
+
+def weighted_median(df, value_col, weight_col):
+    df_sorted = df.sort_values(value_col)
+    cumulative_weight = df_sorted[weight_col].cumsum()
+    cutoff = df_sorted[weight_col].sum() / 2.0
+    return df_sorted.loc[cumulative_weight >= cutoff, value_col].iloc[0]
 
 
 # ============================================================
@@ -285,7 +302,9 @@ st.caption(
 st.sidebar.title("Dashboard Filters")
 
 borough_options = sorted(
-    zone_elasticity_df["pickup_borough"].dropna().astype(str).unique().tolist()
+    zone_elasticity_df["pickup_borough"].dropna().astype(str)
+    # .replace({"EWR": "Newark Liberty International Airport"})
+    .unique().tolist()
 )
 
 selected_borough = st.sidebar.selectbox(
@@ -307,9 +326,9 @@ selected_weather = st.sidebar.multiselect(
 active_weather_conditions = selected_weather if selected_weather else weather_options
 
 top_n = st.sidebar.slider(
-    "Top N",
+    "Top Pickup Zones",
     min_value=5,
-    max_value=30,
+    max_value=100,
     value=10,
     step=5,
 )
@@ -322,12 +341,36 @@ min_zone_trips = st.sidebar.slider(
     step=25,
 )
 
+days = st.sidebar.selectbox(
+    "Days",
+    ["All Days", "Weekdays", "Weekends", "Comparison"],
+)
+
 title_borough = "All Boroughs" if selected_borough == "All" else selected_borough
 
+BOROUGH_COLOR_MAP = { # Plotly default pallete
+    "Manhattan": "#636EFA",   # blue
+    "Brooklyn": "#EF553B",    # red
+    "Queens": "#00CC96",      # green
+    "Bronx": "#AB63FA",       # purple
+    "Staten Island": "#FFA15A", # orange
+    "EWR": "#19D3F3" # light blue
+}
 
 # ============================================================
 # FILTERED DATASETS
 # ============================================================
+
+def filter_by_value(df, column, value):
+    if value == "All":
+        return df
+    return df[df[column] == value]
+
+
+def filter_by_list(df, column, values):
+    if not values:
+        return df
+    return df[df[column].isin(values)]
 
 filtered_zone_elasticity = zone_elasticity_df.copy()
 filtered_od_flow = od_flow_df.copy()
@@ -337,47 +380,38 @@ filtered_weather_hourly = weather_hourly_df.copy()
 filtered_zone_summary = zone_df.copy()
 
 if selected_borough != "All":
-    filtered_zone_elasticity = filtered_zone_elasticity[
-        filtered_zone_elasticity["pickup_borough"].astype(str) == selected_borough
-    ]
-
-    filtered_clusters = filtered_clusters[
-        filtered_clusters["pickup_borough"].astype(str) == selected_borough
-    ]
-
-    filtered_od_flow = filtered_od_flow[
-        filtered_od_flow["origin_borough"].astype(str) == selected_borough
-    ]
-
-    filtered_demand_results = filtered_demand_results[
-        filtered_demand_results["pickup_borough"].astype(str) == selected_borough
-    ]
-
-    filtered_weather_hourly = filtered_weather_hourly[
-        filtered_weather_hourly["pickup_borough"].astype(str) == selected_borough
-    ]
-
-    filtered_zone_summary = filtered_zone_summary[
-        filtered_zone_summary["pickup_borough"].astype(str) == selected_borough
-    ]
+    # Borough filtering
+    filtered_zone_elasticity = filter_by_value(zone_elasticity_df, "pickup_borough", selected_borough)
+    filtered_clusters = filter_by_value(zone_clusters_df, "pickup_borough", selected_borough)
+    filtered_od_flow = filter_by_value(od_flow_df, "origin_borough", selected_borough)
+    filtered_demand_results = filter_by_value(demand_results_df, "pickup_borough", selected_borough)
+    filtered_weather_hourly = filter_by_value(weather_hourly_df, "pickup_borough", selected_borough)
+    filtered_zone_summary = filter_by_value(zone_df, "pickup_borough", selected_borough)
 
 if active_weather_conditions:
-    filtered_zone_elasticity = filtered_zone_elasticity[
-        filtered_zone_elasticity["weather_condition"].astype(str).isin(active_weather_conditions)
-    ]
+    # Weather filtering
+    filtered_zone_elasticity = filter_by_list(filtered_zone_elasticity, "weather_condition", active_weather_conditions)
+    filtered_od_flow = filter_by_list(filtered_od_flow, "weather_condition", active_weather_conditions)
+    filtered_demand_results = filter_by_list(filtered_demand_results, "weather_condition", active_weather_conditions)
 
-    filtered_od_flow = filtered_od_flow[
-        filtered_od_flow["weather_condition"].astype(str).isin(active_weather_conditions)
+if days in ["Weekdays", "Weekends"]:
+    is_weekend_flag = days == "Weekends"
+    filtered_weather_hourly = filtered_weather_hourly[
+        filtered_weather_hourly["is_weekend"] == is_weekend_flag
     ]
-
-    filtered_demand_results = filtered_demand_results[
-        filtered_demand_results["weather_condition"].astype(str).isin(active_weather_conditions)
+elif days == "Comparison":
+    weekday_filtered_weather_hourly = filtered_weather_hourly[
+        filtered_weather_hourly["is_weekend"] == False
     ]
-
+    weekend_filtered_weather_hourly = filtered_weather_hourly[
+        filtered_weather_hourly["is_weekend"] == True
+    ]
+    
 filtered_zone_elasticity = filtered_zone_elasticity[
     filtered_zone_elasticity["total_trips"] >= min_zone_trips
 ]
 
+# print(filtered_weather_hourly)
 
 # ============================================================
 # TABS
@@ -402,25 +436,56 @@ tab_overview, tab_weather, tab_zone, tab_od, tab_prediction, tab_cluster = st.ta
 with tab_overview:
     st.subheader("Executive Overview")
     st.markdown(
-        f'<div class="section-note">Ringkasan performa taxi demand, revenue, fare, dan durasi perjalanan untuk filter: <b>{title_borough}</b>.</div>',
+        f'<div class="section-note">Overview dari taxi demand, revenue, fare, dan durasi perjalanan untuk filter: <b>{title_borough}</b>.</div>',
         unsafe_allow_html=True,
     )
 
     overview_source = filtered_zone_summary.copy()
 
     total_trips = int(overview_source["total_trips"].sum()) if "total_trips" in overview_source.columns else 0
+    num_days = filtered_weather_hourly["pickup_date"].nunique()
+    avg_trips_per_day = total_trips / num_days if num_days > 0 else 0
     total_revenue = float(overview_source["total_revenue"].sum()) if "total_revenue" in overview_source.columns else 0.0
     avg_fare = weighted_average(overview_source, "avg_total_amount", "total_trips")
+    median_fare = weighted_median(overview_source, "avg_total_amount", "total_trips")
     avg_duration = weighted_average(overview_source, "avg_trip_duration_minutes", "total_trips")
+    median_duration = weighted_median(overview_source, "avg_trip_duration_minutes", "total_trips")
     avg_distance = weighted_average(overview_source, "avg_trip_distance", "total_trips")
+    median_distance = weighted_median(overview_source, "avg_trip_distance", "total_trips")
+    
+    rainy_share = (
+        (filtered_weather_hourly.groupby("pickup_date")["rain"].mean() > 0.1)
+        .mean() * 100
+    )
 
-    col1, col2, col3, col4, col5 = st.columns(5)
+    col1, col2, col3, col4, col5, col6 = st.columns(6)
 
-    col1.metric("Total Trips", format_number(total_trips))
-    col2.metric("Total Revenue", format_currency(total_revenue))
-    col3.metric("Avg Fare", format_currency(avg_fare))
-    col4.metric("Avg Duration", f"{avg_duration:.2f} min")
-    col5.metric("Avg Distance", f"{avg_distance:.2f} mi")
+    col1.metric(
+        "Total Trips", 
+        format_number(total_trips),
+        delta=f"Average: {format_number(avg_trips_per_day, True)}",
+        delta_color="off",
+    )
+    col2.metric("Total Revenue (USD)", format_currency(total_revenue))
+    col3.metric(
+        "Fare (USD)",
+        format_currency(avg_fare),
+        delta=f"Median: {format_currency(median_fare)}",
+        delta_color="off",
+    )
+    col4.metric(
+        "Duration",
+        f"{avg_duration:.2f} min",
+        delta=f"Median: {median_duration:.2f} min",
+        delta_color="off",
+    )
+    col5.metric(
+        "Distance",
+        f"{avg_distance:.2f} miles",
+        delta=f"Median: {median_distance:.2f} miles",
+        delta_color="off",
+    )
+    col6.metric("Rainy Day Share", f"{rainy_share:.1f}%")
 
     st.divider()
 
@@ -434,14 +499,35 @@ with tab_overview:
         else:
             daily_plot = (
                 filtered_weather_hourly.groupby("pickup_date", as_index=False)
-                .agg(total_trips=("total_trips", "sum"))
+                .agg(
+                    total_trips=("total_trips", "sum"),
+                    avg_precipitation=("precipitation", "mean"),
+                )
                 .sort_values("pickup_date")
             )
+            
+            from plotly.subplots import make_subplots
+            import plotly.graph_objects as go
+
+            fig_daily = make_subplots(specs=[[{"secondary_y": True}]])
+            fig_daily.add_trace(
+                go.Scatter(x=daily_plot["pickup_date"], y=daily_plot["total_trips"],
+                           mode="lines+markers", name="Total Trips"),
+                secondary_y=False,
+            )
+            fig_daily.add_trace(
+                go.Bar(x=daily_plot["pickup_date"], y=daily_plot["avg_precipitation"],
+                       name="Precipitation", opacity=0.4),
+                secondary_y=True,
+            )
+            fig_daily.update_yaxes(title_text="Total Trips", secondary_y=False)
+            fig_daily.update_yaxes(title_text="Precipitation (mm)", secondary_y=True)
 
             fig_daily = px.line(
                 daily_plot,
                 x="pickup_date",
                 y="total_trips",
+                color_discrete_map=BOROUGH_COLOR_MAP,
                 markers=True,
                 title=f"Daily Total Trips - {title_borough}",
             )
@@ -452,7 +538,12 @@ with tab_overview:
                 hovermode="x unified",
             )
 
-            st.plotly_chart(update_chart_layout(fig_daily, height=430), use_container_width=True)
+            fig_daily.update_xaxes(
+                range=[daily_plot["pickup_date"].min(), daily_plot["pickup_date"].max()],
+                tickformat="%d %b %Y",
+            )
+
+            st.plotly_chart(update_chart_layout(fig_daily, height=430), width='stretch')
 
     with col_right:
         st.markdown("### Top Pickup Zones")
@@ -470,6 +561,7 @@ with tab_overview:
                 x="total_trips",
                 y="pickup_zone",
                 color="pickup_borough",
+                color_discrete_map=BOROUGH_COLOR_MAP,
                 orientation="h",
                 title=f"Top {top_n} Pickup Zones - {title_borough}",
                 hover_data=existing_columns(
@@ -477,6 +569,9 @@ with tab_overview:
                     ["total_revenue", "avg_total_amount", "avg_trip_duration_minutes"],
                 ),
             )
+            
+            if selected_borough != "All":
+                fig_zone.update_layout(showlegend=False)
 
             fig_zone.update_layout(
                 xaxis_title="Total Trips",
@@ -484,34 +579,78 @@ with tab_overview:
                 yaxis={"categoryorder": "total ascending"},
             )
 
-            st.plotly_chart(update_chart_layout(fig_zone, height=430), use_container_width=True)
+            st.plotly_chart(update_chart_layout(fig_zone, height=430), width='stretch')
 
+    st.divider()
+    
     st.markdown("### Hourly Demand Pattern")
 
     if filtered_weather_hourly.empty:
         st.warning("Tidak ada hourly demand untuk filter yang dipilih.")
     else:
-        hourly_pattern = (
-            filtered_weather_hourly.groupby("pickup_hour", as_index=False)
-            .agg(total_trips=("total_trips", "sum"))
-            .sort_values("pickup_hour")
-        )
+        if days == "Comparison":
+            # Weekday aggregation
+            weekday_hourly_pattern = (
+                weekday_filtered_weather_hourly
+                .groupby("pickup_hour", as_index=False)
+                .agg(total_trips=("total_trips", "sum"))
+            )
+            weekday_hourly_pattern["day_type"] = "Weekday"
 
-        fig_hourly = px.line(
-            hourly_pattern,
-            x="pickup_hour",
-            y="total_trips",
-            markers=True,
-            title=f"Total Trips by Pickup Hour - {title_borough}",
-        )
+            # Weekend aggregation
+            weekend_hourly_pattern = (
+                weekend_filtered_weather_hourly
+                .groupby("pickup_hour", as_index=False)
+                .agg(total_trips=("total_trips", "sum"))
+            )
+            weekend_hourly_pattern["day_type"] = "Weekend"
+
+            comparison_df = pd.concat(
+                [weekday_hourly_pattern, weekend_hourly_pattern],
+                ignore_index=True
+            ).sort_values("pickup_hour")
+
+            fig_hourly = px.line(
+                comparison_df,
+                x="pickup_hour",
+                y="total_trips",
+                color="day_type",
+                markers=True,
+                title=f"Total Trips by Pickup Hour - {title_borough}",
+            )
+
+        else:
+            hourly_pattern = (
+                filtered_weather_hourly
+                .groupby("pickup_hour", as_index=False)
+                .agg(total_trips=("total_trips", "sum"))
+                .sort_values("pickup_hour")
+            )
+
+            fig_hourly = px.line(
+                hourly_pattern,
+                x="pickup_hour",
+                y="total_trips",
+                markers=True,
+                title=f"Total Trips by Pickup Hour - {title_borough}",
+            )
 
         fig_hourly.update_layout(
-            xaxis_title="Pickup Hour",
+            xaxis=dict(
+                title="Pickup Hour",
+                tickmode="array",
+                tickvals=list(range(24)),
+                ticktext=[f"{h:02d}.00" for h in range(24)],
+                range=[0, 23],
+            ),
             yaxis_title="Total Trips",
             hovermode="x unified",
         )
 
-        st.plotly_chart(update_chart_layout(fig_hourly, height=440), use_container_width=True)
+        st.plotly_chart(
+            update_chart_layout(fig_hourly, height=440),
+            width='stretch'
+        )
 
 
 # ============================================================
@@ -581,7 +720,7 @@ with tab_weather:
                 yaxis_title="Demand Lift (%)",
             )
 
-            st.plotly_chart(update_chart_layout(fig_lift, height=430), use_container_width=True)
+            st.plotly_chart(update_chart_layout(fig_lift, height=430), width='stretch')
 
         with col_right:
             fig_duration = px.bar(
@@ -600,7 +739,7 @@ with tab_weather:
                 yaxis_title="Duration Delta (minutes)",
             )
 
-            st.plotly_chart(update_chart_layout(fig_duration, height=430), use_container_width=True)
+            st.plotly_chart(update_chart_layout(fig_duration, height=430), width='stretch')
 
         st.markdown("### Weather Trade-Off: Demand Lift vs Duration Impact")
 
@@ -628,7 +767,7 @@ with tab_weather:
             yaxis_title="Duration Delta (minutes)",
         )
 
-        st.plotly_chart(update_chart_layout(fig_weather_scatter, height=520), use_container_width=True)
+        st.plotly_chart(update_chart_layout(fig_weather_scatter, height=520), width='stretch')
 
         st.markdown("### Weather Impact Table")
         st.dataframe(
@@ -647,7 +786,7 @@ with tab_weather:
                     "tip_delta_pct",
                 ],
             ),
-            use_container_width=True,
+            width='stretch',
         )
 
 
@@ -681,6 +820,8 @@ with tab_zone:
                     non_clear_zone.sort_values("demand_lift_pct", ascending=False)
                     .head(top_n)
                 )
+                
+                # print(top_demand_lift)
 
                 fig_top_lift = px.bar(
                     top_demand_lift,
@@ -706,7 +847,7 @@ with tab_zone:
                     yaxis={"categoryorder": "total ascending"},
                 )
 
-                st.plotly_chart(update_chart_layout(fig_top_lift, height=470), use_container_width=True)
+                st.plotly_chart(update_chart_layout(fig_top_lift, height=470), width='stretch')
 
             with col_right:
                 st.markdown("### Top Duration Impact Zones")
@@ -740,7 +881,7 @@ with tab_zone:
                     yaxis={"categoryorder": "total ascending"},
                 )
 
-                st.plotly_chart(update_chart_layout(fig_top_duration, height=470), use_container_width=True)
+                st.plotly_chart(update_chart_layout(fig_top_duration, height=470), width='stretch')
 
             st.markdown("### Demand Lift vs Duration Impact by Zone")
 
@@ -769,7 +910,7 @@ with tab_zone:
                 yaxis_title="Duration Delta (minutes)",
             )
 
-            st.plotly_chart(update_chart_layout(fig_zone_scatter, height=560), use_container_width=True)
+            st.plotly_chart(update_chart_layout(fig_zone_scatter, height=560), width='stretch')
 
             st.markdown("### Zone Elasticity Data")
             st.dataframe(
@@ -789,7 +930,7 @@ with tab_zone:
                         "weather_sensitivity_label",
                     ],
                 ),
-                use_container_width=True,
+                width='stretch',
             )
 
 
@@ -838,7 +979,7 @@ with tab_od:
             yaxis={"categoryorder": "total ascending"},
         )
 
-        st.plotly_chart(update_chart_layout(fig_routes, height=540), use_container_width=True)
+        st.plotly_chart(update_chart_layout(fig_routes, height=540), width='stretch')
 
         st.markdown("### OD Flow Table")
 
@@ -860,7 +1001,7 @@ with tab_od:
                     "avg_tip_pct",
                 ],
             ),
-            use_container_width=True,
+            width='stretch',
         )
 
 
@@ -939,7 +1080,7 @@ with tab_prediction:
                 hovermode="x unified",
             )
 
-            st.plotly_chart(update_chart_layout(fig_pred_daily, height=450), use_container_width=True)
+            st.plotly_chart(update_chart_layout(fig_pred_daily, height=450), width='stretch')
 
         with col_right:
             st.markdown("### Feature Importance")
@@ -963,7 +1104,7 @@ with tab_prediction:
                 yaxis={"categoryorder": "total ascending"},
             )
 
-            st.plotly_chart(update_chart_layout(fig_importance, height=450), use_container_width=True)
+            st.plotly_chart(update_chart_layout(fig_importance, height=450), width='stretch')
 
         st.markdown("### Prediction Error Analysis")
 
@@ -998,7 +1139,7 @@ with tab_prediction:
                 yaxis_title="Predicted Trips",
             )
 
-            st.plotly_chart(update_chart_layout(fig_actual_pred, height=500), use_container_width=True)
+            st.plotly_chart(update_chart_layout(fig_actual_pred, height=500), width='stretch')
 
         with col_right:
             fig_error = px.histogram(
@@ -1013,7 +1154,7 @@ with tab_prediction:
                 yaxis_title="Row Count",
             )
 
-            st.plotly_chart(update_chart_layout(fig_error, height=500), use_container_width=True)
+            st.plotly_chart(update_chart_layout(fig_error, height=500), width='stretch')
 
         st.markdown("### Prediction Results Sample")
 
@@ -1032,7 +1173,7 @@ with tab_prediction:
                     "absolute_error",
                 ],
             ),
-            use_container_width=True,
+            width='stretch',
         )
 
 
@@ -1088,7 +1229,7 @@ with tab_cluster:
                 showlegend=False,
             )
 
-            st.plotly_chart(update_chart_layout(fig_cluster_count, height=450), use_container_width=True)
+            st.plotly_chart(update_chart_layout(fig_cluster_count, height=450), width='stretch')
 
         with col_right:
             st.markdown("### Cluster Summary")
@@ -1108,7 +1249,7 @@ with tab_cluster:
                             "avg_tip_delta_pct",
                         ],
                     ),
-                    use_container_width=True,
+                    width='stretch',
                 )
             else:
                 st.info("Cluster summary tidak tersedia.")
@@ -1140,7 +1281,7 @@ with tab_cluster:
             yaxis_title="Average Duration Delta (minutes)",
         )
 
-        st.plotly_chart(update_chart_layout(fig_cluster_scatter, height=560), use_container_width=True)
+        st.plotly_chart(update_chart_layout(fig_cluster_scatter, height=560), width='stretch')
 
         st.markdown("### High-Volume High Demand Lift Zones")
 
@@ -1165,6 +1306,7 @@ with tab_cluster:
                 x="total_weather_trips",
                 y="pickup_zone",
                 color="pickup_borough",
+                color_discrete_map=BOROUGH_COLOR_MAP,
                 orientation="h",
                 title=f"Top {top_n} High-Volume High Demand Lift Zones",
                 hover_data=existing_columns(
@@ -1184,7 +1326,7 @@ with tab_cluster:
                 yaxis={"categoryorder": "total ascending"},
             )
 
-            st.plotly_chart(update_chart_layout(fig_high_cluster, height=470), use_container_width=True)
+            st.plotly_chart(update_chart_layout(fig_high_cluster, height=470), width='stretch')
 
         st.markdown("### Zone Cluster Data")
 
@@ -1209,7 +1351,7 @@ with tab_cluster:
                     "avg_precipitation",
                 ],
             ),
-            use_container_width=True,
+            width='stretch',
         )
 
 
