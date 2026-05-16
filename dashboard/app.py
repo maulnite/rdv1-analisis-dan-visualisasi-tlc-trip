@@ -344,59 +344,51 @@ BOROUGH_COLOR_MAP = { # Plotly default pallete
 # FILTERED DATASETS
 # ============================================================
 
+def filter_by_value(df, column, value):
+    if value == "All":
+        return df
+    return df[df[column] == value]
+
+
+def filter_by_list(df, column, values):
+    if not values:
+        return df
+    return df[df[column].isin(values)]
+
 filtered_zone_elasticity = zone_elasticity_df.copy()
 filtered_od_flow = od_flow_df.copy()
 filtered_clusters = zone_clusters_df.copy()
 filtered_demand_results = demand_results_df.copy()
 filtered_weather_hourly = weather_hourly_df.copy()
 filtered_zone_summary = zone_df.copy()
-filtered_hourly_source = filtered_weather_hourly.copy()
 
 if selected_borough != "All":
-    filtered_zone_elasticity = filtered_zone_elasticity[
-        filtered_zone_elasticity["pickup_borough"].astype(str) == selected_borough
-    ]
-
-    filtered_clusters = filtered_clusters[
-        filtered_clusters["pickup_borough"].astype(str) == selected_borough
-    ]
-
-    filtered_od_flow = filtered_od_flow[
-        filtered_od_flow["origin_borough"].astype(str) == selected_borough
-    ]
-
-    filtered_demand_results = filtered_demand_results[
-        filtered_demand_results["pickup_borough"].astype(str) == selected_borough
-    ]
-
-    filtered_weather_hourly = filtered_weather_hourly[
-        filtered_weather_hourly["pickup_borough"].astype(str) == selected_borough
-    ]
-
-    filtered_zone_summary = filtered_zone_summary[
-        filtered_zone_summary["pickup_borough"].astype(str) == selected_borough
-    ]
+    # Borough filtering
+    filtered_zone_elasticity = filter_by_value(zone_elasticity_df, "pickup_borough", selected_borough)
+    filtered_clusters = filter_by_value(zone_clusters_df, "pickup_borough", selected_borough)
+    filtered_od_flow = filter_by_value(od_flow_df, "origin_borough", selected_borough)
+    filtered_demand_results = filter_by_value(demand_results_df, "pickup_borough", selected_borough)
+    filtered_weather_hourly = filter_by_value(weather_hourly_df, "pickup_borough", selected_borough)
+    filtered_zone_summary = filter_by_value(zone_df, "pickup_borough", selected_borough)
 
 if active_weather_conditions:
-    filtered_zone_elasticity = filtered_zone_elasticity[
-        filtered_zone_elasticity["weather_condition"].astype(str).isin(active_weather_conditions)
-    ]
+    # Weather filtering
+    filtered_zone_elasticity = filter_by_list(filtered_zone_elasticity, "weather_condition", active_weather_conditions)
+    filtered_od_flow = filter_by_list(filtered_od_flow, "weather_condition", active_weather_conditions)
+    filtered_demand_results = filter_by_list(filtered_demand_results, "weather_condition", active_weather_conditions)
 
-    filtered_od_flow = filtered_od_flow[
-        filtered_od_flow["weather_condition"].astype(str).isin(active_weather_conditions)
+if days in ["Weekdays", "Weekends"]:
+    is_weekend_flag = days == "Weekends"
+    filtered_weather_hourly = filtered_weather_hourly[
+        filtered_weather_hourly["is_weekend"] == is_weekend_flag
     ]
-
-    filtered_demand_results = filtered_demand_results[
-        filtered_demand_results["weather_condition"].astype(str).isin(active_weather_conditions)
-    ]
-
-if days == "Weekdays":
-    filtered_hourly_source = filtered_hourly_source[filtered_hourly_source["is_weekend"] == False]
-elif days == "Weekends":
-    filtered_hourly_source = filtered_hourly_source[filtered_hourly_source["is_weekend"] == True]
 elif days == "Comparison":
-    weekday_filtered_hourly_source = filtered_hourly_source[filtered_hourly_source["is_weekend"] == False]
-    weekend_filtered_hourly_source = filtered_hourly_source[filtered_hourly_source["is_weekend"] == True]
+    weekday_filtered_weather_hourly = filtered_weather_hourly[
+        filtered_weather_hourly["is_weekend"] == False
+    ]
+    weekend_filtered_weather_hourly = filtered_weather_hourly[
+        filtered_weather_hourly["is_weekend"] == True
+    ]
     
 filtered_zone_elasticity = filtered_zone_elasticity[
     filtered_zone_elasticity["total_trips"] >= min_zone_trips
@@ -549,13 +541,13 @@ with tab_overview:
     
     st.markdown("### Hourly Demand Pattern")
 
-    if filtered_hourly_source.empty:
+    if filtered_weather_hourly.empty:
         st.warning("Tidak ada hourly demand untuk filter yang dipilih.")
     else:
         if days == "Comparison":
             # Weekday aggregation
             weekday_hourly_pattern = (
-                weekday_filtered_hourly_source
+                weekday_filtered_weather_hourly
                 .groupby("pickup_hour", as_index=False)
                 .agg(total_trips=("total_trips", "sum"))
             )
@@ -563,7 +555,7 @@ with tab_overview:
 
             # Weekend aggregation
             weekend_hourly_pattern = (
-                weekend_filtered_hourly_source
+                weekend_filtered_weather_hourly
                 .groupby("pickup_hour", as_index=False)
                 .agg(total_trips=("total_trips", "sum"))
             )
@@ -585,7 +577,7 @@ with tab_overview:
 
         else:
             hourly_pattern = (
-                filtered_hourly_source
+                filtered_weather_hourly
                 .groupby("pickup_hour", as_index=False)
                 .agg(total_trips=("total_trips", "sum"))
                 .sort_values("pickup_hour")
