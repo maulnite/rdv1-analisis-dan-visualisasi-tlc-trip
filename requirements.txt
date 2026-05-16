@@ -10,3 +10,5 @@ streamlit-folium
 geopandas
 scikit-learn
 matplotlib
+joblib
+numpy
