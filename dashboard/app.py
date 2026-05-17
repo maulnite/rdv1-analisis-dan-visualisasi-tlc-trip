@@ -1,6 +1,6 @@
 from pathlib import Path
 import json
-
+import numpy as np
 import duckdb
 import pandas as pd
 import plotly.express as px
@@ -652,6 +652,75 @@ with tab_overview:
             width='stretch'
         )
 
+with tab_overview:
+    # ... (kode metrik, daily trip trend, dan top pickup zones di atasnya) ...
+
+    st.markdown("### Hourly Demand Pattern")
+    if filtered_weather_hourly.empty:
+        # ... (kode hourly demand pattern milikmu) ...
+        st.plotly_chart(
+            update_chart_layout(fig_hourly, height=440),
+            width='stretch'
+        )
+
+    # 👇 PASTE KODE GEOMAP KAMU DI SINI (Pastikan indentasi/jarak spasi di pinggir sejajar) 👇
+    st.divider()
+    st.markdown("### NYC Taxi Demand GeoMap")
+    st.markdown(
+        '<div class="section-note">Peta persebaran total trip per zona menggunakan skala logaritmik untuk menyeimbangkan visualisasi area dengan kepadatan tinggi (Manhattan).</div>',
+        unsafe_allow_html=True,
+    )
+
+    if filtered_zone_summary.empty:
+        st.warning("Tidak ada data zona untuk ditampilkan di peta.")
+    else:
+        geomap_data = filtered_zone_summary.copy()
+        geomap_data["log_total_trips"] = np.log1p(geomap_data["total_trips"])
+
+        # 1. Gunakan kolom pickup_location_id sesuai skema datamu
+        geomap_data["map_id"] = geomap_data["pickup_location_id"].astype(str)
+
+        geojson_url = "https://raw.githubusercontent.com/martj42/nyc_taxi_visualizations/master/taxi_zones.geojson"
+
+        try:
+            fig_map = px.choropleth_mapbox(
+                geomap_data,
+                geojson=geojson_url,
+                featureidkey="properties.LocationID", # Kunci dari GeoJSON
+                locations="map_id",                   # Kunci dari DataFrame (sekarang pasti ada)
+                color="log_total_trips",
+                color_continuous_scale="Viridis",
+                mapbox_style="carto-darkmatter",
+                zoom=9,
+                center={"lat": 40.7128, "lon": -74.0060},
+                opacity=0.7,
+                hover_name="pickup_zone",
+                hover_data={
+                    "map_id": False,
+                    "total_trips": True, 
+                    "pickup_borough": True,
+                    "log_total_trips": False
+                },
+            )
+
+            fig_map.update_layout(
+                margin={"r":0,"t":0,"l":0,"b":0},
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)",
+                font=dict(color="#e5e7eb"),
+                coloraxis_colorbar=dict(
+                    title=dict(
+                        text="Log(Trips)",
+                        font=dict(color="#e5e7eb")
+                    ),
+                    tickfont=dict(color="#e5e7eb")
+                )
+            )
+
+            st.plotly_chart(fig_map, use_container_width=True)
+
+        except Exception as e:
+            st.error(f"Gagal merender peta: {e}. Pastikan key mapping GeoJSON dan DataFrame sudah sesuai.")
 
 # ============================================================
 # TAB 2: WEATHER IMPACT
@@ -788,6 +857,16 @@ with tab_weather:
             ),
             width='stretch',
         )
+
+        st.divider()
+        st.subheader("💡 Research Question Insight")
+        st.markdown("""
+        **Apakah hujan meningkatkan demand taxi?**
+        
+        **Iya, hujan terbukti meningkatkan demand.** Secara volume per jam (*hourly rate*), cuaca hujan terutama dengan intensitas tinggi terbukti meningkatkan *demand* taksi secara drastis di New York City hingga mencapai **99.46%** saat terjadi *heavy rain*. 
+        
+        Namun, jika dilihat dari volume trip total, perjalanan kumulatif terbesar tetap dipegang oleh cuaca cerah (*clear*) dengan total **7.439.397 perjalanan**. Hal ini disebabkan oleh faktor frekuensi hari cerah yang jauh lebih mendominasi kalender sepanjang periode analisis (Januari–Maret 2025) dibandingkan dengan hari terjadinya hujan.
+        """)
 
 
 # ============================================================
