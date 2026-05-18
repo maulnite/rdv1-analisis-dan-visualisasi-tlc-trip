@@ -750,6 +750,7 @@ with tab_overview:
                 xaxis_title="Total Trips",
                 yaxis_title="Pickup Zone",
                 legend_title="Borough",
+                yaxis={"categoryorder": "total ascending"},
             )
 
             st.plotly_chart(update_chart_layout(fig_zone, height=430), width='stretch')
@@ -970,10 +971,11 @@ with tab_weather:
     if weather_display.empty:
         st.warning("Tidak ada data weather impact untuk filter cuaca yang dipilih.")
     else:
-        col1, col2, col3 = st.columns(3)
+        col1, col2, col3, col4 = st.columns(4)
 
         best_condition = weather_display.sort_values("demand_lift_pct", ascending=False).iloc[0]
         highest_duration = weather_display.sort_values("duration_delta_minutes", ascending=False).iloc[0]
+        highest_fare = weather_display.sort_values("fare_delta_amount", ascending=False).iloc[0]
         highest_volume_condition = weather_display.sort_values("total_trips", ascending=False).iloc[0]
 
         col1.metric(
@@ -987,7 +989,12 @@ with tab_weather:
             f"{highest_duration['duration_delta_minutes']:.2f} min",
         )
         col3.metric(
-            "Largest Trip Volume",
+            "Highest Fare Amount Impact",
+            str(highest_fare["weather_condition"]),
+            f"{highest_fare['fare_delta_amount']:.2f} USD",
+        )
+        col4.metric(
+            "Largest Total Trips",
             str(highest_volume_condition["weather_condition"]),
             format_number(highest_volume_condition["total_trips"]),
         )
@@ -1005,12 +1012,14 @@ with tab_weather:
         )
 
         st.divider()
+        
+        weather_display_without_clear = weather_display[weather_display["weather_condition"] != "clear"].copy()
 
-        col_left, col_right = st.columns(2)
+        col_left, col_middle, col_right = st.columns(3)
 
         with col_left:
             fig_lift = px.bar(
-                weather_display,
+                weather_display_without_clear,
                 x="weather_condition",
                 y="demand_lift_pct",
                 title="Demand Lift by Weather Condition",
@@ -1024,10 +1033,27 @@ with tab_weather:
                 yaxis_title="Demand Lift (%)",
             )
             st.plotly_chart(update_chart_layout(fig_lift, height=430), width='stretch')
+            
+        with col_middle:
+            fig_fare_amount = px.bar(
+                weather_display_without_clear,
+                x="weather_condition",
+                y="fare_delta_amount",
+                title="Fare Amount by Weather Condition",
+                hover_data=existing_columns(
+                    weather_display,
+                    ["total_trips", "avg_duration", "avg_trip_duration_minutes"],
+                ),
+            )
+            fig_fare_amount.update_layout(
+                xaxis_title="Weather Condition",
+                yaxis_title="Fare Amount (USD)",
+            )
+            st.plotly_chart(update_chart_layout(fig_fare_amount, height=430), width='stretch')
 
         with col_right:
             fig_duration = px.bar(
-                weather_display,
+                weather_display_without_clear,
                 x="weather_condition",
                 y="duration_delta_minutes",
                 title="Duration Delta by Weather Condition",
