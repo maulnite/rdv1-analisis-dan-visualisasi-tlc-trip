@@ -1132,6 +1132,8 @@ with tab_zone:
             fig_top_lift.update_layout(
                 xaxis_title="Demand Lift (%)",
                 yaxis_title="Pickup Zone",
+                yaxis={"categoryorder": "total ascending"},
+                
             )
             st.plotly_chart(update_chart_layout(fig_top_lift, height=470), width='stretch')
 
@@ -1161,6 +1163,7 @@ with tab_zone:
             fig_top_duration.update_layout(
                 xaxis_title="Duration Delta (minutes)",
                 yaxis_title="Pickup Zone",
+                yaxis={"categoryorder": "total ascending"},
             )
             st.plotly_chart(update_chart_layout(fig_top_duration, height=470), width='stretch')
 
