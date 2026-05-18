@@ -1290,8 +1290,8 @@ with tab_od:
                 top_routes.sort_values(trip_col, ascending=True),
                 x=trip_col,
                 y="route",
-                color="weather_condition" if "weather_condition" in top_routes.columns else None,
-                color_discrete_map=WEATHER_COLOR_MAP,
+                color="destination_borough",
+                color_discrete_map=BOROUGH_COLOR_MAP,
                 orientation="h",
                 title=f"Top {top_n} OD Routes",
                 hover_data=existing_columns(
@@ -1310,6 +1310,7 @@ with tab_od:
             fig_routes.update_layout(
                 xaxis_title="Trip Count",
                 yaxis_title="Route",
+                yaxis={"categoryorder": "total ascending"},
             )
             st.plotly_chart(update_chart_layout(fig_routes, height=540), width='stretch')
 
