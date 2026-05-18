@@ -810,10 +810,10 @@ with tab_overview:
 
     st.divider()
     st.markdown("### NYC Taxi Demand GeoMap")
-    st.markdown(
-        '<div class="section-note">Peta choropleth menggunakan file lokal <code>dashboard/assets/taxi_zones.geojson</code>. Data metrik tetap berasal dari hasil pipeline.</div>',
-        unsafe_allow_html=True,
-    )
+    # st.markdown(
+    #     '<div class="section-note">Peta choropleth menggunakan file lokal <code>dashboard/assets/taxi_zones.geojson</code>. Data metrik tetap berasal dari hasil pipeline.</div>',
+    #     unsafe_allow_html=True,
+    # )
 
     taxi_zones_geojson = read_geojson(str(TAXI_ZONES_GEOJSON_PATH))
 
@@ -833,22 +833,21 @@ with tab_overview:
             geomap_data["map_id"] = normalize_location_id_series(geomap_data["pickup_location_id"])
             geomap_data = geomap_data.dropna(subset=["map_id"])
 
-            map_level = st.radio(
+            map_level = st.selectbox(
                 "Level Agregasi Peta",
-                ["Per Borough", "Per Zona"],
-                horizontal=True,
+                ["Per Zona Taxi", "Per Borough"],
             )
 
             map_metric = st.selectbox(
                 "Metrik Peta",
-                ["Total Trips", "Average Fare", "Average Duration", "Average Distance"],
+                ["Total Trips", "Average Fare (USD)", "Average Duration (Min)", "Average Distance (Miles)"],
             )
 
             metric_config = {
                 "Total Trips": ("total_trips", "Total Trips", True),
-                "Average Fare": ("avg_total_amount", "Average Fare", False),
-                "Average Duration": ("avg_trip_duration_minutes", "Average Duration", False),
-                "Average Distance": ("avg_trip_distance", "Average Distance", False),
+                "Average Fare (USD)": ("avg_total_amount", "Average Fare (USD)", False),
+                "Average Duration (Min)": ("avg_trip_duration_minutes", "Average Duration (Min)", False),
+                "Average Distance (Miles)": ("avg_trip_distance", "Average Distance (Miles)", False),
             }
 
             metric_col, metric_label, use_log_scale = metric_config[map_metric]
@@ -874,10 +873,32 @@ with tab_overview:
                 if use_log_scale:
                     geomap_data["map_color_value"] = np.log1p(geomap_data["display_value"])
                     color_bar_title = f"Log({color_bar_title})"
+
+                    max_val = geomap_data["display_value"].max()
+                    min_val = max(geomap_data["display_value"].min(), 1)  # avoid log(0)
+
+                    # Update the ticxbox into exponential
+                    log_min = np.floor(np.log10(min_val))
+                    log_max = np.ceil(np.log10(max_val))
+                    original_ticks = np.logspace(log_min, log_max, num=6)
+                    original_ticks = np.clip(original_ticks, min_val, max_val)
+
+                    tick_vals = np.log1p(original_ticks)
+                    tick_text = [f"{v:,.0f}" for v in original_ticks]
                 else:
                     geomap_data["map_color_value"] = geomap_data["display_value"]
 
                 try:
+                    hover_data = {
+                        "map_id": False,
+                        "map_color_value": False,
+                        "pickup_zone": "pickup_zone" in geomap_data.columns,
+                        "pickup_borough": "pickup_borough" in geomap_data.columns,
+                        f"{metric_col}": ":," if metric_col == "total_trips" else ":,.2f",
+                        # f"{metric_col}": False if metric_col == "total_trips" else ":,",
+                    }
+
+                    
                     fig_map = px.choropleth_map(
                         geomap_data,
                         geojson=taxi_zones_geojson,
@@ -890,14 +911,7 @@ with tab_overview:
                         center={"lat": 40.7128, "lon": -74.0060},
                         opacity=0.72,
                         hover_name=hover_title,
-                        hover_data={
-                            "map_id": False,
-                            "pickup_zone": "pickup_zone" in geomap_data.columns,
-                            "pickup_borough": "pickup_borough" in geomap_data.columns,
-                            "display_value": ":,.2f",
-                            "map_color_value": False,
-                            "total_trips": ":,",
-                        },
+                        hover_data=hover_data,
                         labels={
                             "display_value": metric_label,
                             "map_color_value": color_bar_title,
@@ -914,6 +928,11 @@ with tab_overview:
                             tickfont=dict(color="#e5e7eb"),
                         ),
                     )
+                    
+                    if use_log_scale:
+                        fig_map.update_coloraxes(
+                            colorbar=dict(tickvals=tick_vals, ticktext=tick_text)
+                        )
 
                     st.plotly_chart(fig_map, width='stretch')
                 except Exception as error:
