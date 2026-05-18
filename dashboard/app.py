@@ -1130,7 +1130,7 @@ with tab_zone:
     if filtered_zone_elasticity.empty:
         st.warning("Tidak ada data zone elasticity untuk filter yang dipilih.")
     else:
-        col_left, col_right = st.columns(2)
+        col_left, col_middle, col_right = st.columns(3)
 
         with col_left:
             st.markdown("### Top Demand Lift Zones")
@@ -1162,6 +1162,36 @@ with tab_zone:
                 
             )
             st.plotly_chart(update_chart_layout(fig_top_lift, height=470), width='stretch')
+            
+        with col_middle:
+            st.markdown("### Top Fare Amount Impact Zones")
+
+            top_duration = (
+                filtered_zone_elasticity
+                .sort_values("fare_delta_amount", ascending=False)
+                .head(top_n)
+            )
+
+            fig_top_duration = px.bar(
+                top_duration.sort_values("fare_delta_amount", ascending=True),
+                x="fare_delta_amount",
+                y="pickup_zone",
+                color="weather_condition",
+                color_discrete_map=WEATHER_COLOR_MAP,
+                orientation="h",
+                title=f"Top {top_n} Zones by Fare Amount Impact",
+                hover_name="pickup_zone",
+                hover_data=existing_columns(
+                    top_duration,
+                    ["pickup_borough", "total_trips", "duration_delta_minutes"],
+                ),
+            )
+            fig_top_duration.update_layout(
+                xaxis_title="Fare Amount Delta (minutes)",
+                yaxis_title="Pickup Zone",
+                yaxis={"categoryorder": "total ascending"},
+            )
+            st.plotly_chart(update_chart_layout(fig_top_duration, height=470), width='stretch')
 
         with col_right:
             st.markdown("### Top Duration Impact Zones")
@@ -1192,7 +1222,226 @@ with tab_zone:
                 yaxis={"categoryorder": "total ascending"},
             )
             st.plotly_chart(update_chart_layout(fig_top_duration, height=470), width='stretch')
+        
+        st.markdown("### Zone Map — Weather Impact")
 
+        taxi_zones_geojson = read_geojson(str(TAXI_ZONES_GEOJSON_PATH))
+
+        if taxi_zones_geojson is None:
+            st.warning(
+                "File GeoJSON belum tersedia. Letakkan di `dashboard/assets/taxi_zones.geojson`."
+            )
+        elif filtered_zone_elasticity.empty:
+            st.warning("Tidak ada data zona untuk peta.")
+        elif "zone_id" not in filtered_zone_elasticity.columns:
+            st.warning("Kolom zone_id tidak tersedia.")
+        else:
+            map_col1, map_col2, map_col3 = st.columns(3)
+
+            with map_col1:
+                # Available weather conditions (exclude clear — it's the baseline, delta ≈ 0)
+                available_weathers = [
+                    w for w in filtered_zone_elasticity["weather_condition"]
+                    .astype(str).unique()
+                    if w != "clear"
+                ]
+                if not available_weathers:
+                    st.warning("Tidak ada data non-clear weather untuk dianalisis.")
+                    st.stop()
+
+                # Order them sensibly
+                ordered_weathers = [w for w in WEATHER_ORDER if w in available_weathers]
+
+                selected_map_weather = st.selectbox(
+                    "Weather Condition",
+                    ordered_weathers,
+                    index=len(ordered_weathers) - 1 if "heavy_rain" not in ordered_weathers
+                          else ordered_weathers.index("heavy_rain"),  # default to heavy_rain
+                    key="map_weather_selector",
+                )
+
+            with map_col2:
+                map_metric = st.selectbox(
+                    "Impact Metric",
+                    [
+                        "Demand Lift (%)",
+                        "Duration Delta (min)",
+                        "Fare Delta (USD)",
+                        "Tip Delta (%)",
+                        "Total Trips",
+                    ],
+                    key="map_metric_selector",
+                )
+
+            with map_col3:
+                map_level = st.selectbox(
+                    "Aggregation Level",
+                    ["Per Zone", "Per Borough"],
+                    key="map_level_selector",
+                )
+
+            # ============================================================
+            # METRIC CONFIG
+            # ============================================================
+            # (column, label, use_log_scale, diverging_scale, aggregation_func)
+            metric_config = {
+                "Demand Lift (%)":      ("demand_lift_pct",         "Demand Lift (%)",       False, True,  "mean"),
+                "Duration Delta (min)": ("duration_delta_minutes",  "Duration Delta (min)",  False, True,  "mean"),
+                "Fare Delta (USD)":     ("fare_delta_amount",       "Fare Delta (USD)",      False, True,  "mean"),
+                "Tip Delta (%)":        ("tip_delta_pct",           "Tip Delta (%)",         False, True,  "mean"),
+                "Total Trips":          ("total_trips",             "Total Trips",           True,  False, "sum"),
+            }
+
+            metric_col, metric_label, use_log_scale, is_diverging, agg_func = metric_config[map_metric]
+
+            # ============================================================
+            # FILTER TO ONE WEATHER CONDITION → one row per zone
+            # ============================================================
+            geomap_data = filtered_zone_elasticity[
+                filtered_zone_elasticity["weather_condition"].astype(str) == selected_map_weather
+            ].copy()
+
+            if geomap_data.empty:
+                st.warning(f"Tidak ada data untuk weather {selected_map_weather} pada filter ini.")
+                st.stop()
+
+            if metric_col not in geomap_data.columns:
+                st.warning(f"Kolom `{metric_col}` tidak tersedia.")
+                st.stop()
+
+            # Clean and normalize IDs
+            geomap_data["map_id"] = normalize_location_id_series(geomap_data["zone_id"])
+            geomap_data = geomap_data.dropna(subset=["map_id"])
+            geomap_data[metric_col] = pd.to_numeric(geomap_data[metric_col], errors="coerce")
+            geomap_data = geomap_data.dropna(subset=[metric_col])
+
+            # ============================================================
+            # BOROUGH AGGREGATION (if requested)
+            # ============================================================
+            if map_level == "Per Borough":
+                if "pickup_borough" not in geomap_data.columns:
+                    st.warning("Kolom pickup_borough tidak tersedia.")
+                    st.stop()
+
+                # Aggregate metric per borough, then broadcast back to each zone
+                # (this keeps zone-level GeoJSON polygons but colors them by borough value)
+                borough_agg = (
+                    geomap_data.groupby("pickup_borough")[metric_col]
+                    .agg(agg_func)
+                    .reset_index()
+                    .rename(columns={metric_col: "display_value"})
+                )
+                geomap_data = geomap_data.merge(borough_agg, on="pickup_borough", how="left")
+                hover_title = "pickup_borough"
+            else:
+                geomap_data["display_value"] = geomap_data[metric_col]
+                hover_title = "pickup_zone" if "pickup_zone" in geomap_data.columns else "map_id"
+
+            # ============================================================
+            # COLOR SCALE CONFIG
+            # ============================================================
+            if use_log_scale:
+                geomap_data["map_color_value"] = np.log1p(geomap_data["display_value"].clip(lower=0))
+                color_scale = "Viridis"
+                color_midpoint = None
+
+                # Log colorbar ticks (show real numbers)
+                max_val = geomap_data["display_value"].max()
+                min_val = max(geomap_data["display_value"].min(), 1)
+                log_min = np.floor(np.log10(min_val))
+                log_max = np.ceil(np.log10(max_val))
+                original_ticks = np.logspace(log_min, log_max, num=6)
+                tick_vals = np.log1p(original_ticks)
+                tick_text = [f"{v:,.0f}" for v in original_ticks]
+                colorbar_title = f"{metric_label} (log)"
+            else:
+                geomap_data["map_color_value"] = geomap_data["display_value"]
+                if is_diverging:
+                    color_scale = "RdBu_r"     # red = negative impact, blue = positive
+                    color_midpoint = 0          # CENTER on zero — critical for delta metrics
+                else:
+                    color_scale = "Viridis"
+                    color_midpoint = None
+                tick_vals, tick_text = None, None
+                colorbar_title = metric_label
+
+            # ============================================================
+            # BUILD HOVER DATA — show context columns
+            # ============================================================
+            hover_columns = {
+                "map_id": False,
+                "map_color_value": False,
+                "display_value": False,
+                "pickup_zone": "pickup_zone" in geomap_data.columns,
+                "pickup_borough": "pickup_borough" in geomap_data.columns,
+                "weather_condition": False,  # already in title
+            }
+
+            # Surface the actual metric + complementary metrics
+            complementary_cols = {
+                "demand_lift_pct": ":.2f",
+                "duration_delta_minutes": ":.2f",
+                "fare_delta_amount": ":.2f",
+                "tip_delta_pct": ":.2f",
+                "total_trips": ":,",
+            }
+            for col, fmt in complementary_cols.items():
+                if col in geomap_data.columns:
+                    hover_columns[col] = fmt
+
+            # ============================================================
+            # RENDER MAP
+            # ============================================================
+            try:
+                fig_map = px.choropleth_map(
+                    geomap_data,
+                    geojson=taxi_zones_geojson,
+                    featureidkey="properties.LocationID",
+                    locations="map_id",
+                    color="map_color_value",
+                    color_continuous_scale=color_scale,
+                    color_continuous_midpoint=color_midpoint,
+                    map_style="carto-darkmatter",
+                    zoom=9,
+                    center={"lat": 40.7128, "lon": -74.0060},
+                    opacity=0.75,
+                    hover_name=hover_title,
+                    hover_data=hover_columns,
+                    labels={"map_color_value": colorbar_title},
+                )
+
+                fig_map.update_layout(
+                    margin={"r": 0, "t": 30, "l": 0, "b": 0},
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    font=dict(color="#e5e7eb"),
+                    title={
+                        "text": f"{metric_label} during {selected_map_weather.replace('_', ' ').title()} — {title_borough}",
+                        "font": {"color": "#f8fafc"},
+                    },
+                    coloraxis_colorbar=dict(
+                        title=dict(text=colorbar_title, font=dict(color="#e5e7eb")),
+                        tickfont=dict(color="#e5e7eb"),
+                    ),
+                )
+
+                if use_log_scale and tick_vals is not None:
+                    fig_map.update_coloraxes(
+                        colorbar=dict(tickvals=tick_vals, ticktext=tick_text)
+                    )
+
+                st.plotly_chart(fig_map, use_container_width=True)
+
+                # Helpful caption
+                if is_diverging:
+                    st.caption(
+                        f"Color scale centered at 0. **Blue** = higher than clear-weather baseline, "
+                        f"**red** = lower. Showing **{len(geomap_data)} zones** during **{selected_map_weather}**."
+                    )
+
+            except Exception as error:
+                st.error(f"Gagal merender peta: {error}")
+                st.exception(error)  # show traceback for debugging
+        
         st.markdown("### Demand Lift vs Duration Impact by Zone")
 
         size_col = "total_trips" if "total_trips" in filtered_zone_elasticity.columns else None
