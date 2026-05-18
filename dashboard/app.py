@@ -1,9 +1,12 @@
 from pathlib import Path
 import json
-import numpy as np
+
 import duckdb
+import numpy as np
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import streamlit as st
 
 
@@ -23,8 +26,20 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = PROJECT_ROOT / "data"
 CURATED_DIR = DATA_DIR / "curated"
 ML_DIR = DATA_DIR / "ml"
+ASSETS_DIR = PROJECT_ROOT / "dashboard" / "assets"
+
+TAXI_ZONES_GEOJSON_PATH = ASSETS_DIR / "taxi_zones.geojson"
 
 WEATHER_ORDER = ["clear", "light_rain", "moderate_rain", "heavy_rain", "snow"]
+
+BOROUGH_COLOR_MAP = {
+    "Manhattan": "#636EFA",
+    "Brooklyn": "#EF553B",
+    "Queens": "#00CC96",
+    "Bronx": "#AB63FA",
+    "Staten Island": "#FFA15A",
+    "EWR": "#19D3F3",
+}
 
 px.defaults.template = "plotly_dark"
 
@@ -42,12 +57,12 @@ st.markdown(
         }
 
         .block-container {
-            padding-top: 3.2rem !important;
+            padding-top: 3.4rem !important;
             padding-bottom: 2rem;
         }
 
         .main-title {
-            font-size: 2.2rem;
+            font-size: 2.05rem;
             font-weight: 800;
             line-height: 1.35;
             margin-top: 0.25rem;
@@ -70,6 +85,16 @@ st.markdown(
         .section-note {
             color: #94a3b8;
             font-size: 0.92rem;
+            margin-bottom: 1rem;
+        }
+
+        .insight-box {
+            background: rgba(15, 23, 42, 0.82);
+            border: 1px solid rgba(148, 163, 184, 0.28);
+            padding: 1rem;
+            border-radius: 0.9rem;
+            color: #cbd5e1;
+            margin-top: 0.7rem;
             margin-bottom: 1rem;
         }
 
@@ -128,7 +153,7 @@ st.markdown(
 def file_must_exist(path: Path) -> Path:
     if not path.exists() or path.stat().st_size == 0:
         st.error(f"File belum ada atau kosong: {path}")
-        st.info("Jalankan DAG `tlc_full_pipeline` di Airflow terlebih dahulu.")
+        st.info("Jalankan DAG `tlc_full_pipeline` di Airflow terlebih dahulu, atau extract data ZIP ke folder project.")
         st.stop()
     return path
 
@@ -155,55 +180,68 @@ def read_json(path_str: str) -> dict:
         return json.load(file)
 
 
-def format_number(value: float, decimal:bool = False) -> str:
+@st.cache_data(show_spinner=False)
+def read_geojson(path_str: str) -> dict | None:
+    path = Path(path_str)
+
+    if not path.exists() or path.stat().st_size == 0:
+        return None
+
+    with path.open("r", encoding="utf-8") as file:
+        geojson_data = json.load(file)
+
+    for feature in geojson_data.get("features", []):
+        properties = feature.setdefault("properties", {})
+
+        location_id = (
+            properties.get("LocationID")
+            or properties.get("location_id")
+            or properties.get("location_i")
+            or properties.get("locationid")
+            or properties.get("LocationId")
+            or properties.get("OBJECTID")
+            or properties.get("objectid")
+        )
+
+        if location_id is not None:
+            try:
+                properties["LocationID"] = str(int(float(str(location_id))))
+            except Exception:
+                properties["LocationID"] = str(location_id)
+
+    return geojson_data
+
+
+def format_number(value: float, decimal: bool = False) -> str:
     try:
         if decimal:
             return f"{float(value):,.2f}"
-        else:
-            return f"{float(value):,.0f}"
+        return f"{float(value):,.0f}"
     except Exception:
         return "0"
 
 
 def format_currency(value: float) -> str:
     try:
+        value = float(value)
+
         if value >= 1_000_000_000:
-            return f"${value/1_000_000_000:.2f}B"
-        elif value >= 1_000_000:
-            return f"${value/1_000_000:.2f}M"
-        elif value >= 1_000:
-            return f"${value/1_000:.2f}K"
-        else:
-            return f"${value:,.2f}"
+            return f"${value / 1_000_000_000:.2f}B"
+        if value >= 1_000_000:
+            return f"${value / 1_000_000:.2f}M"
+        if value >= 1_000:
+            return f"${value / 1_000:.2f}K"
+
+        return f"${value:,.2f}"
     except Exception:
-        return "$0.0"
+        return "$0.00"
 
 
-def weighted_average(df: pd.DataFrame, value_col: str, weight_col: str) -> float:
-    if df.empty:
-        return 0.0
-
-    if value_col not in df.columns or weight_col not in df.columns:
-        return 0.0
-
-    valid = df[[value_col, weight_col]].dropna()
-
-    if valid.empty or valid[weight_col].sum() == 0:
-        return 0.0
-
-    return float((valid[value_col] * valid[weight_col]).sum() / valid[weight_col].sum())
-
-
-def apply_weather_order(df: pd.DataFrame, column: str = "weather_condition") -> pd.DataFrame:
-    if column in df.columns:
-        df = df.copy()
-        df[column] = pd.Categorical(
-            df[column],
-            categories=WEATHER_ORDER,
-            ordered=True,
-        )
-        df = df.sort_values(column)
-    return df
+def first_existing_column(df: pd.DataFrame, candidates: list[str]) -> str | None:
+    for column in candidates:
+        if column in df.columns:
+            return column
+    return None
 
 
 def existing_columns(df: pd.DataFrame, columns: list[str]) -> list[str]:
@@ -211,7 +249,57 @@ def existing_columns(df: pd.DataFrame, columns: list[str]) -> list[str]:
 
 
 def safe_dataframe(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
-    return df[existing_columns(df, columns)]
+    selected_columns = existing_columns(df, columns)
+    if not selected_columns:
+        return df
+    return df[selected_columns]
+
+
+def weighted_average(df: pd.DataFrame, value_col: str, weight_col: str) -> float:
+    if df.empty or value_col not in df.columns or weight_col not in df.columns:
+        return 0.0
+
+    valid = df[[value_col, weight_col]].dropna()
+    valid = valid[valid[weight_col] > 0]
+
+    if valid.empty or valid[weight_col].sum() == 0:
+        return 0.0
+
+    return float((valid[value_col] * valid[weight_col]).sum() / valid[weight_col].sum())
+
+
+def weighted_median(df: pd.DataFrame, value_col: str, weight_col: str) -> float:
+    if df.empty or value_col not in df.columns or weight_col not in df.columns:
+        return 0.0
+
+    valid = df[[value_col, weight_col]].dropna()
+    valid = valid[valid[weight_col] > 0]
+
+    if valid.empty:
+        return 0.0
+
+    df_sorted = valid.sort_values(value_col)
+    cumulative_weight = df_sorted[weight_col].cumsum()
+    cutoff = df_sorted[weight_col].sum() / 2.0
+
+    result = df_sorted.loc[cumulative_weight >= cutoff, value_col]
+
+    if result.empty:
+        return 0.0
+
+    return float(result.iloc[0])
+
+
+def apply_weather_order(df: pd.DataFrame, column: str = "weather_condition") -> pd.DataFrame:
+    if column in df.columns:
+        df = df.copy()
+        df[column] = pd.Categorical(
+            df[column].astype(str),
+            categories=WEATHER_ORDER,
+            ordered=True,
+        )
+        df = df.sort_values(column)
+    return df
 
 
 def update_chart_layout(fig, height: int | None = None):
@@ -229,11 +317,104 @@ def update_chart_layout(fig, height: int | None = None):
     return fig
 
 
-def weighted_median(df, value_col, weight_col):
-    df_sorted = df.sort_values(value_col)
-    cumulative_weight = df_sorted[weight_col].cumsum()
-    cutoff = df_sorted[weight_col].sum() / 2.0
-    return df_sorted.loc[cumulative_weight >= cutoff, value_col].iloc[0]
+def filter_by_value(df: pd.DataFrame, column: str, value: str) -> pd.DataFrame:
+    if value == "All" or column not in df.columns:
+        return df
+
+    return df[df[column].astype(str) == str(value)]
+
+
+def filter_by_list(df: pd.DataFrame, column: str, values: list[str]) -> pd.DataFrame:
+    if not values or column not in df.columns:
+        return df
+
+    return df[df[column].astype(str).isin([str(value) for value in values])]
+
+
+def filter_by_day_type(df: pd.DataFrame, selected_days: str) -> pd.DataFrame:
+    if selected_days not in ["Weekdays", "Weekends"]:
+        return df
+
+    if "is_weekend" not in df.columns:
+        return df
+
+    is_weekend_flag = selected_days == "Weekends"
+    return df[df["is_weekend"].astype(bool) == is_weekend_flag]
+
+
+def normalize_location_id_series(series: pd.Series) -> pd.Series:
+    return pd.to_numeric(series, errors="coerce").astype("Int64").astype(str)
+
+
+def build_zone_summary_from_hourly(hourly_df: pd.DataFrame, fallback_zone_df: pd.DataFrame) -> pd.DataFrame:
+    if hourly_df.empty:
+        return fallback_zone_df.copy()
+
+    required_columns = ["pickup_location_id", "pickup_borough", "pickup_zone", "total_trips"]
+    if not all(column in hourly_df.columns for column in required_columns):
+        return fallback_zone_df.copy()
+
+    work = hourly_df.copy()
+    work["total_trips"] = pd.to_numeric(work["total_trips"], errors="coerce").fillna(0)
+
+    group_cols = ["pickup_location_id", "pickup_borough", "pickup_zone"]
+    result = (
+        work.groupby(group_cols, as_index=False)
+        .agg(total_trips=("total_trips", "sum"))
+    )
+
+    if "total_revenue" in work.columns:
+        result = result.merge(
+            work.groupby(group_cols, as_index=False).agg(total_revenue=("total_revenue", "sum")),
+            on=group_cols,
+            how="left",
+        )
+
+    weighted_metrics = [
+        "avg_total_amount",
+        "avg_trip_duration_minutes",
+        "avg_trip_distance",
+        "avg_speed_mph",
+        "avg_tip_percentage",
+        "avg_tip_pct",
+    ]
+
+    for metric in weighted_metrics:
+        if metric in work.columns:
+            metric_work = work[group_cols + ["total_trips", metric]].dropna()
+            metric_work = metric_work[metric_work["total_trips"] > 0]
+
+            if not metric_work.empty:
+                metric_work[f"{metric}_weighted"] = metric_work[metric] * metric_work["total_trips"]
+                metric_agg = (
+                    metric_work.groupby(group_cols, as_index=False)
+                    .agg(
+                        metric_weighted_sum=(f"{metric}_weighted", "sum"),
+                        metric_weight_sum=("total_trips", "sum"),
+                    )
+                )
+                metric_agg[metric] = metric_agg["metric_weighted_sum"] / metric_agg["metric_weight_sum"]
+                metric_agg = metric_agg[group_cols + [metric]]
+
+                result = result.merge(metric_agg, on=group_cols, how="left")
+
+    return result
+
+
+def get_prediction_columns(df: pd.DataFrame) -> tuple[str | None, str | None, str | None]:
+    actual_col = first_existing_column(
+        df,
+        ["actual_total_trips", "actual_trips", "total_trips", "y_actual"],
+    )
+    predicted_col = first_existing_column(
+        df,
+        ["predicted_total_trips", "predicted_trips", "prediction", "y_pred"],
+    )
+    abs_error_col = first_existing_column(
+        df,
+        ["absolute_error", "abs_error", "prediction_abs_error"],
+    )
+    return actual_col, predicted_col, abs_error_col
 
 
 # ============================================================
@@ -261,14 +442,13 @@ cluster_summary = read_json(str(ML_DIR / f"zone_cluster_summary_{PERIOD}.json"))
 # BASIC DATA PREP
 # ============================================================
 
-if "pickup_date" in daily_df.columns:
-    daily_df["pickup_date"] = pd.to_datetime(daily_df["pickup_date"])
+for df in [daily_df, weather_hourly_df, demand_results_df]:
+    if "pickup_date" in df.columns:
+        df["pickup_date"] = pd.to_datetime(df["pickup_date"])
 
-if "pickup_date" in weather_hourly_df.columns:
-    weather_hourly_df["pickup_date"] = pd.to_datetime(weather_hourly_df["pickup_date"])
-
-if "pickup_date" in demand_results_df.columns:
-    demand_results_df["pickup_date"] = pd.to_datetime(demand_results_df["pickup_date"])
+for df in [weather_hourly_df, demand_results_df]:
+    if "is_weekend" in df.columns:
+        df["is_weekend"] = df["is_weekend"].astype(bool)
 
 weather_impact_df = apply_weather_order(weather_impact_df)
 zone_elasticity_df = apply_weather_order(zone_elasticity_df)
@@ -301,10 +481,16 @@ st.caption(
 
 st.sidebar.title("Dashboard Filters")
 
+raw_borough_options = (
+    zone_elasticity_df["pickup_borough"]
+    .dropna()
+    .astype(str)
+    .unique()
+    .tolist()
+)
+
 borough_options = sorted(
-    zone_elasticity_df["pickup_borough"].dropna().astype(str)
-    # .replace({"EWR": "Newark Liberty International Airport"})
-    .unique().tolist()
+    [borough for borough in raw_borough_options if borough not in ["EWR", "Unknown", "nan"]]
 )
 
 selected_borough = st.sidebar.selectbox(
@@ -312,10 +498,8 @@ selected_borough = st.sidebar.selectbox(
     ["All"] + borough_options,
 )
 
-weather_options = [
-    weather for weather in WEATHER_ORDER
-    if weather in zone_elasticity_df["weather_condition"].astype(str).unique()
-]
+weather_source = zone_elasticity_df["weather_condition"].dropna().astype(str).unique().tolist()
+weather_options = [weather for weather in WEATHER_ORDER if weather in weather_source]
 
 selected_weather = st.sidebar.multiselect(
     "Weather Condition",
@@ -326,20 +510,23 @@ selected_weather = st.sidebar.multiselect(
 active_weather_conditions = selected_weather if selected_weather else weather_options
 
 top_n = st.sidebar.slider(
-    "Top Pickup Zones",
+    "Top N",
     min_value=5,
-    max_value=100,
+    max_value=30,
     value=10,
     step=5,
 )
 
 min_zone_trips = st.sidebar.slider(
-    "Min Zone-Weather Trips",
+    "Min Trips for Zone Elasticity",
     min_value=0,
     max_value=500,
     value=50,
     step=25,
+    help="Filter minimum jumlah trip untuk kombinasi pickup zone dan weather condition. Hanya memengaruhi tab Zone Elasticity.",
 )
+
+st.sidebar.caption("Min Trips hanya memengaruhi tab Zone Elasticity.")
 
 days = st.sidebar.selectbox(
     "Days",
@@ -348,29 +535,10 @@ days = st.sidebar.selectbox(
 
 title_borough = "All Boroughs" if selected_borough == "All" else selected_borough
 
-BOROUGH_COLOR_MAP = { # Plotly default pallete
-    "Manhattan": "#636EFA",   # blue
-    "Brooklyn": "#EF553B",    # red
-    "Queens": "#00CC96",      # green
-    "Bronx": "#AB63FA",       # purple
-    "Staten Island": "#FFA15A", # orange
-    "EWR": "#19D3F3" # light blue
-}
 
 # ============================================================
 # FILTERED DATASETS
 # ============================================================
-
-def filter_by_value(df, column, value):
-    if value == "All":
-        return df
-    return df[df[column] == value]
-
-
-def filter_by_list(df, column, values):
-    if not values:
-        return df
-    return df[df[column].isin(values)]
 
 filtered_zone_elasticity = zone_elasticity_df.copy()
 filtered_od_flow = od_flow_df.copy()
@@ -380,38 +548,32 @@ filtered_weather_hourly = weather_hourly_df.copy()
 filtered_zone_summary = zone_df.copy()
 
 if selected_borough != "All":
-    # Borough filtering
-    filtered_zone_elasticity = filter_by_value(zone_elasticity_df, "pickup_borough", selected_borough)
-    filtered_clusters = filter_by_value(zone_clusters_df, "pickup_borough", selected_borough)
-    filtered_od_flow = filter_by_value(od_flow_df, "origin_borough", selected_borough)
-    filtered_demand_results = filter_by_value(demand_results_df, "pickup_borough", selected_borough)
-    filtered_weather_hourly = filter_by_value(weather_hourly_df, "pickup_borough", selected_borough)
-    filtered_zone_summary = filter_by_value(zone_df, "pickup_borough", selected_borough)
+    filtered_zone_elasticity = filter_by_value(filtered_zone_elasticity, "pickup_borough", selected_borough)
+    filtered_clusters = filter_by_value(filtered_clusters, "pickup_borough", selected_borough)
+    filtered_od_flow = filter_by_value(filtered_od_flow, "origin_borough", selected_borough)
+    filtered_demand_results = filter_by_value(filtered_demand_results, "pickup_borough", selected_borough)
+    filtered_weather_hourly = filter_by_value(filtered_weather_hourly, "pickup_borough", selected_borough)
+    filtered_zone_summary = filter_by_value(filtered_zone_summary, "pickup_borough", selected_borough)
 
 if active_weather_conditions:
-    # Weather filtering
     filtered_zone_elasticity = filter_by_list(filtered_zone_elasticity, "weather_condition", active_weather_conditions)
     filtered_od_flow = filter_by_list(filtered_od_flow, "weather_condition", active_weather_conditions)
     filtered_demand_results = filter_by_list(filtered_demand_results, "weather_condition", active_weather_conditions)
+    filtered_weather_hourly = filter_by_list(filtered_weather_hourly, "weather_condition", active_weather_conditions)
 
 if days in ["Weekdays", "Weekends"]:
-    is_weekend_flag = days == "Weekends"
-    filtered_weather_hourly = filtered_weather_hourly[
-        filtered_weather_hourly["is_weekend"] == is_weekend_flag
-    ]
-elif days == "Comparison":
-    weekday_filtered_weather_hourly = filtered_weather_hourly[
-        filtered_weather_hourly["is_weekend"] == False
-    ]
-    weekend_filtered_weather_hourly = filtered_weather_hourly[
-        filtered_weather_hourly["is_weekend"] == True
-    ]
-    
+    filtered_weather_hourly = filter_by_day_type(filtered_weather_hourly, days)
+    filtered_demand_results = filter_by_day_type(filtered_demand_results, days)
+
 filtered_zone_elasticity = filtered_zone_elasticity[
     filtered_zone_elasticity["total_trips"] >= min_zone_trips
-]
+].copy()
 
-# print(filtered_weather_hourly)
+filtered_zone_summary_from_weather = build_zone_summary_from_hourly(
+    filtered_weather_hourly,
+    filtered_zone_summary,
+)
+
 
 # ============================================================
 # TABS
@@ -436,15 +598,16 @@ tab_overview, tab_weather, tab_zone, tab_od, tab_prediction, tab_cluster = st.ta
 with tab_overview:
     st.subheader("Executive Overview")
     st.markdown(
-        f'<div class="section-note">Overview dari taxi demand, revenue, fare, dan durasi perjalanan untuk filter: <b>{title_borough}</b>.</div>',
+        f'<div class="section-note">Ringkasan performa taxi demand, gross trip value, fare, distance, dan durasi perjalanan untuk filter: <b>{title_borough}</b>.</div>',
         unsafe_allow_html=True,
     )
 
-    overview_source = filtered_zone_summary.copy()
+    overview_source = filtered_weather_hourly.copy()
 
     total_trips = int(overview_source["total_trips"].sum()) if "total_trips" in overview_source.columns else 0
-    num_days = filtered_weather_hourly["pickup_date"].nunique()
+    num_days = overview_source["pickup_date"].nunique() if "pickup_date" in overview_source.columns else 0
     avg_trips_per_day = total_trips / num_days if num_days > 0 else 0
+
     total_revenue = float(overview_source["total_revenue"].sum()) if "total_revenue" in overview_source.columns else 0.0
     avg_fare = weighted_average(overview_source, "avg_total_amount", "total_trips")
     median_fare = weighted_median(overview_source, "avg_total_amount", "total_trips")
@@ -452,23 +615,26 @@ with tab_overview:
     median_duration = weighted_median(overview_source, "avg_trip_duration_minutes", "total_trips")
     avg_distance = weighted_average(overview_source, "avg_trip_distance", "total_trips")
     median_distance = weighted_median(overview_source, "avg_trip_distance", "total_trips")
-    
-    rainy_share = (
-        (filtered_weather_hourly.groupby("pickup_date")["rain"].mean() > 0.1)
-        .mean() * 100
-    )
+
+    if not overview_source.empty and "pickup_date" in overview_source.columns and "rain" in overview_source.columns:
+        rainy_share = (
+            (overview_source.groupby("pickup_date")["rain"].mean() > 0.1)
+            .mean() * 100
+        )
+    else:
+        rainy_share = 0.0
 
     col1, col2, col3, col4, col5, col6 = st.columns(6)
 
     col1.metric(
-        "Total Trips", 
+        "Total Trips",
         format_number(total_trips),
-        delta=f"Average: {format_number(avg_trips_per_day, True)}",
+        delta=f"Avg/day: {format_number(avg_trips_per_day, True)}",
         delta_color="off",
     )
-    col2.metric("Total Revenue (USD)", format_currency(total_revenue))
+    col2.metric("Gross Trip Value", format_currency(total_revenue))
     col3.metric(
-        "Fare (USD)",
+        "Fare",
         format_currency(avg_fare),
         delta=f"Median: {format_currency(median_fare)}",
         delta_color="off",
@@ -481,8 +647,8 @@ with tab_overview:
     )
     col5.metric(
         "Distance",
-        f"{avg_distance:.2f} miles",
-        delta=f"Median: {median_distance:.2f} miles",
+        f"{avg_distance:.2f} mi",
+        delta=f"Median: {median_distance:.2f} mi",
         delta_color="off",
     )
     col6.metric("Rainy Day Share", f"{rainy_share:.1f}%")
@@ -494,120 +660,114 @@ with tab_overview:
     with col_left:
         st.markdown("### Daily Trip Trend")
 
-        if filtered_weather_hourly.empty:
+        if overview_source.empty or "pickup_date" not in overview_source.columns:
             st.warning("Tidak ada data daily trend untuk filter yang dipilih.")
         else:
             daily_plot = (
-                filtered_weather_hourly.groupby("pickup_date", as_index=False)
+                overview_source.groupby("pickup_date", as_index=False)
                 .agg(
                     total_trips=("total_trips", "sum"),
-                    avg_precipitation=("precipitation", "mean"),
+                    avg_precipitation=("precipitation", "mean") if "precipitation" in overview_source.columns else ("total_trips", "size"),
                 )
                 .sort_values("pickup_date")
             )
-            
-            from plotly.subplots import make_subplots
-            import plotly.graph_objects as go
+
+            if "avg_precipitation" not in daily_plot.columns:
+                daily_plot["avg_precipitation"] = 0.0
 
             fig_daily = make_subplots(specs=[[{"secondary_y": True}]])
+
             fig_daily.add_trace(
-                go.Scatter(x=daily_plot["pickup_date"], y=daily_plot["total_trips"],
-                           mode="lines+markers", name="Total Trips"),
+                go.Scatter(
+                    x=daily_plot["pickup_date"],
+                    y=daily_plot["total_trips"],
+                    mode="lines+markers",
+                    name="Total Trips",
+                ),
                 secondary_y=False,
             )
-            fig_daily.add_trace(
-                go.Bar(x=daily_plot["pickup_date"], y=daily_plot["avg_precipitation"],
-                       name="Precipitation", opacity=0.4),
-                secondary_y=True,
-            )
-            fig_daily.update_yaxes(title_text="Total Trips", secondary_y=False)
-            fig_daily.update_yaxes(title_text="Precipitation (mm)", secondary_y=True)
 
-            fig_daily = px.line(
-                daily_plot,
-                x="pickup_date",
-                y="total_trips",
-                color_discrete_map=BOROUGH_COLOR_MAP,
-                markers=True,
-                title=f"Daily Total Trips - {title_borough}",
+            fig_daily.add_trace(
+                go.Bar(
+                    x=daily_plot["pickup_date"],
+                    y=daily_plot["avg_precipitation"],
+                    name="Avg Precipitation",
+                    opacity=0.35,
+                ),
+                secondary_y=True,
             )
 
             fig_daily.update_layout(
-                xaxis_title="Pickup Date",
-                yaxis_title="Total Trips",
+                title=f"Daily Total Trips vs Precipitation - {title_borough}",
                 hovermode="x unified",
             )
-
+            fig_daily.update_yaxes(title_text="Total Trips", secondary_y=False)
+            fig_daily.update_yaxes(title_text="Avg Precipitation", secondary_y=True)
             fig_daily.update_xaxes(
                 range=[daily_plot["pickup_date"].min(), daily_plot["pickup_date"].max()],
                 tickformat="%d %b %Y",
+                title="Pickup Date",
             )
 
-            st.plotly_chart(update_chart_layout(fig_daily, height=430), width='stretch')
+            st.plotly_chart(update_chart_layout(fig_daily, height=430), use_container_width=True)
 
     with col_right:
         st.markdown("### Top Pickup Zones")
 
-        if filtered_zone_summary.empty:
+        if filtered_zone_summary_from_weather.empty:
             st.warning("Tidak ada top zone untuk filter yang dipilih.")
         else:
             top_zones = (
-                filtered_zone_summary.sort_values("total_trips", ascending=False)
+                filtered_zone_summary_from_weather
+                .sort_values("total_trips", ascending=False)
                 .head(top_n)
             )
 
             fig_zone = px.bar(
-                top_zones,
+                top_zones.sort_values("total_trips", ascending=True),
                 x="total_trips",
                 y="pickup_zone",
-                color="pickup_borough",
+                color="pickup_borough" if "pickup_borough" in top_zones.columns else None,
                 color_discrete_map=BOROUGH_COLOR_MAP,
                 orientation="h",
                 title=f"Top {top_n} Pickup Zones - {title_borough}",
                 hover_data=existing_columns(
                     top_zones,
-                    ["total_revenue", "avg_total_amount", "avg_trip_duration_minutes"],
+                    ["pickup_borough", "total_revenue", "avg_total_amount", "avg_trip_duration_minutes"],
                 ),
             )
-            
-            if selected_borough != "All":
-                fig_zone.update_layout(showlegend=False)
 
             fig_zone.update_layout(
                 xaxis_title="Total Trips",
                 yaxis_title="Pickup Zone",
-                yaxis={"categoryorder": "total ascending"},
+                legend_title="Borough",
             )
 
-            st.plotly_chart(update_chart_layout(fig_zone, height=430), width='stretch')
+            st.plotly_chart(update_chart_layout(fig_zone, height=430), use_container_width=True)
 
-    st.divider()
-    
     st.markdown("### Hourly Demand Pattern")
 
     if filtered_weather_hourly.empty:
         st.warning("Tidak ada hourly demand untuk filter yang dipilih.")
     else:
-        if days == "Comparison":
-            # Weekday aggregation
+        if days == "Comparison" and "is_weekend" in filtered_weather_hourly.columns:
             weekday_hourly_pattern = (
-                weekday_filtered_weather_hourly
+                filtered_weather_hourly[filtered_weather_hourly["is_weekend"].astype(bool) == False]
                 .groupby("pickup_hour", as_index=False)
                 .agg(total_trips=("total_trips", "sum"))
             )
-            weekday_hourly_pattern["day_type"] = "Weekday"
+            weekday_hourly_pattern["day_type"] = "Weekdays"
 
-            # Weekend aggregation
             weekend_hourly_pattern = (
-                weekend_filtered_weather_hourly
+                filtered_weather_hourly[filtered_weather_hourly["is_weekend"].astype(bool) == True]
                 .groupby("pickup_hour", as_index=False)
                 .agg(total_trips=("total_trips", "sum"))
             )
-            weekend_hourly_pattern["day_type"] = "Weekend"
+            weekend_hourly_pattern["day_type"] = "Weekends"
 
             comparison_df = pd.concat(
                 [weekday_hourly_pattern, weekend_hourly_pattern],
-                ignore_index=True
+                ignore_index=True,
             ).sort_values("pickup_hour")
 
             fig_hourly = px.line(
@@ -618,7 +778,6 @@ with tab_overview:
                 markers=True,
                 title=f"Total Trips by Pickup Hour - {title_borough}",
             )
-
         else:
             hourly_pattern = (
                 filtered_weather_hourly
@@ -640,87 +799,126 @@ with tab_overview:
                 title="Pickup Hour",
                 tickmode="array",
                 tickvals=list(range(24)),
-                ticktext=[f"{h:02d}.00" for h in range(24)],
+                ticktext=[f"{hour:02d}.00" for hour in range(24)],
                 range=[0, 23],
             ),
             yaxis_title="Total Trips",
             hovermode="x unified",
         )
 
-        st.plotly_chart(
-            update_chart_layout(fig_hourly, height=440),
-            width='stretch'
-        )
+        st.plotly_chart(update_chart_layout(fig_hourly, height=440), use_container_width=True)
 
-with tab_overview:
-    # ... (kode metrik, daily trip trend, dan top pickup zones di atasnya) ...
-
-    st.markdown("### Hourly Demand Pattern")
-    if filtered_weather_hourly.empty:
-        # ... (kode hourly demand pattern milikmu) ...
-        st.plotly_chart(
-            update_chart_layout(fig_hourly, height=440),
-            width='stretch'
-        )
-
-    # 👇 PASTE KODE GEOMAP KAMU DI SINI (Pastikan indentasi/jarak spasi di pinggir sejajar) 👇
     st.divider()
     st.markdown("### NYC Taxi Demand GeoMap")
     st.markdown(
-        '<div class="section-note">Peta persebaran total trip per zona menggunakan skala logaritmik untuk menyeimbangkan visualisasi area dengan kepadatan tinggi (Manhattan).</div>',
+        '<div class="section-note">Peta choropleth menggunakan file lokal <code>dashboard/assets/taxi_zones.geojson</code>. Data metrik tetap berasal dari hasil pipeline.</div>',
         unsafe_allow_html=True,
     )
 
-    if filtered_zone_summary.empty:
+    taxi_zones_geojson = read_geojson(str(TAXI_ZONES_GEOJSON_PATH))
+
+    if taxi_zones_geojson is None:
+        st.warning(
+            "File GeoJSON belum tersedia atau kosong. "
+            "Letakkan file di `dashboard/assets/taxi_zones.geojson` agar peta bisa dirender."
+        )
+    elif filtered_zone_summary_from_weather.empty:
         st.warning("Tidak ada data zona untuk ditampilkan di peta.")
     else:
-        geomap_data = filtered_zone_summary.copy()
-        geomap_data["log_total_trips"] = np.log1p(geomap_data["total_trips"])
+        geomap_data = filtered_zone_summary_from_weather.copy()
 
-        # 1. Gunakan kolom pickup_location_id sesuai skema datamu
-        geomap_data["map_id"] = geomap_data["pickup_location_id"].astype(str)
+        if "pickup_location_id" not in geomap_data.columns:
+            st.warning("Kolom pickup_location_id tidak tersedia untuk mapping GeoJSON.")
+        else:
+            geomap_data["map_id"] = normalize_location_id_series(geomap_data["pickup_location_id"])
+            geomap_data = geomap_data.dropna(subset=["map_id"])
 
-        geojson_url = "https://raw.githubusercontent.com/martj42/nyc_taxi_visualizations/master/taxi_zones.geojson"
-
-        try:
-            fig_map = px.choropleth_mapbox(
-                geomap_data,
-                geojson=geojson_url,
-                featureidkey="properties.LocationID", # Kunci dari GeoJSON
-                locations="map_id",                   # Kunci dari DataFrame (sekarang pasti ada)
-                color="log_total_trips",
-                color_continuous_scale="Viridis",
-                mapbox_style="carto-darkmatter",
-                zoom=9,
-                center={"lat": 40.7128, "lon": -74.0060},
-                opacity=0.7,
-                hover_name="pickup_zone",
-                hover_data={
-                    "map_id": False,
-                    "total_trips": True, 
-                    "pickup_borough": True,
-                    "log_total_trips": False
-                },
+            map_level = st.radio(
+                "Level Agregasi Peta",
+                ["Per Borough", "Per Zona"],
+                horizontal=True,
             )
 
-            fig_map.update_layout(
-                margin={"r":0,"t":0,"l":0,"b":0},
-                paper_bgcolor="rgba(0,0,0,0)",
-                plot_bgcolor="rgba(0,0,0,0)",
-                font=dict(color="#e5e7eb"),
-                coloraxis_colorbar=dict(
-                    title=dict(
-                        text="Log(Trips)",
-                        font=dict(color="#e5e7eb")
-                    ),
-                    tickfont=dict(color="#e5e7eb")
-                )
+            map_metric = st.selectbox(
+                "Metrik Peta",
+                ["Total Trips", "Average Fare", "Average Duration", "Average Distance"],
             )
 
-            st.plotly_chart(fig_map, use_container_width=True)
+            metric_config = {
+                "Total Trips": ("total_trips", "Total Trips", True),
+                "Average Fare": ("avg_total_amount", "Average Fare", False),
+                "Average Duration": ("avg_trip_duration_minutes", "Average Duration", False),
+                "Average Distance": ("avg_trip_distance", "Average Distance", False),
+            }
 
-        except Exception as e:
-            st.error(f"Gagal merender peta: {e}. Pastikan key mapping GeoJSON dan DataFrame sudah sesuai.")
+            metric_col, metric_label, use_log_scale = metric_config[map_metric]
+
+            if metric_col not in geomap_data.columns:
+                st.warning(f"Kolom `{metric_col}` tidak tersedia untuk peta.")
+            else:
+                geomap_data[metric_col] = pd.to_numeric(geomap_data[metric_col], errors="coerce").fillna(0)
+
+                if map_level == "Per Borough" and "pickup_borough" in geomap_data.columns:
+                    if metric_col == "total_trips":
+                        geomap_data["display_value"] = geomap_data.groupby("pickup_borough")[metric_col].transform("sum")
+                    else:
+                        geomap_data["display_value"] = geomap_data.groupby("pickup_borough")[metric_col].transform("mean")
+
+                    hover_title = "pickup_borough"
+                    color_bar_title = f"{metric_label} by Borough"
+                else:
+                    geomap_data["display_value"] = geomap_data[metric_col]
+                    hover_title = "pickup_zone" if "pickup_zone" in geomap_data.columns else "map_id"
+                    color_bar_title = metric_label
+
+                if use_log_scale:
+                    geomap_data["map_color_value"] = np.log1p(geomap_data["display_value"])
+                    color_bar_title = f"Log({color_bar_title})"
+                else:
+                    geomap_data["map_color_value"] = geomap_data["display_value"]
+
+                try:
+                    fig_map = px.choropleth_mapbox(
+                        geomap_data,
+                        geojson=taxi_zones_geojson,
+                        featureidkey="properties.LocationID",
+                        locations="map_id",
+                        color="map_color_value",
+                        color_continuous_scale="Viridis",
+                        mapbox_style="carto-darkmatter",
+                        zoom=9,
+                        center={"lat": 40.7128, "lon": -74.0060},
+                        opacity=0.72,
+                        hover_name=hover_title,
+                        hover_data={
+                            "map_id": False,
+                            "pickup_zone": "pickup_zone" in geomap_data.columns,
+                            "pickup_borough": "pickup_borough" in geomap_data.columns,
+                            "display_value": ":,.2f",
+                            "map_color_value": False,
+                            "total_trips": ":,",
+                        },
+                        labels={
+                            "display_value": metric_label,
+                            "map_color_value": color_bar_title,
+                        },
+                    )
+
+                    fig_map.update_layout(
+                        margin={"r": 0, "t": 0, "l": 0, "b": 0},
+                        paper_bgcolor="rgba(0,0,0,0)",
+                        plot_bgcolor="rgba(0,0,0,0)",
+                        font=dict(color="#e5e7eb"),
+                        coloraxis_colorbar=dict(
+                            title=dict(text=color_bar_title, font=dict(color="#e5e7eb")),
+                            tickfont=dict(color="#e5e7eb"),
+                        ),
+                    )
+
+                    st.plotly_chart(fig_map, use_container_width=True)
+                except Exception as error:
+                    st.error(f"Gagal merender peta: {error}")
+
 
 # ============================================================
 # TAB 2: WEATHER IMPACT
@@ -734,12 +932,12 @@ with tab_weather:
     )
 
     weather_display = weather_impact_df.copy()
-    weather_display["weather_condition"] = weather_display["weather_condition"].astype(str)
+
+    if "weather_condition" in weather_display.columns:
+        weather_display["weather_condition"] = weather_display["weather_condition"].astype(str)
 
     if active_weather_conditions:
-        weather_display = weather_display[
-            weather_display["weather_condition"].isin(active_weather_conditions)
-        ]
+        weather_display = filter_by_list(weather_display, "weather_condition", active_weather_conditions)
 
     if weather_display.empty:
         st.warning("Tidak ada data weather impact untuk filter cuaca yang dipilih.")
@@ -747,25 +945,35 @@ with tab_weather:
         col1, col2, col3 = st.columns(3)
 
         best_condition = weather_display.sort_values("demand_lift_pct", ascending=False).iloc[0]
-        worst_duration = weather_display.sort_values("duration_delta_minutes", ascending=False).iloc[0]
+        highest_duration = weather_display.sort_values("duration_delta_minutes", ascending=False).iloc[0]
         highest_volume_condition = weather_display.sort_values("total_trips", ascending=False).iloc[0]
 
         col1.metric(
             "Highest Demand Lift",
-            f"{best_condition['weather_condition']}",
+            str(best_condition["weather_condition"]),
             f"{best_condition['demand_lift_pct']:.2f}%",
         )
-
         col2.metric(
             "Highest Duration Impact",
-            f"{worst_duration['weather_condition']}",
-            f"{worst_duration['duration_delta_minutes']:.2f} min",
+            str(highest_duration["weather_condition"]),
+            f"{highest_duration['duration_delta_minutes']:.2f} min",
         )
-
         col3.metric(
             "Largest Trip Volume",
-            f"{highest_volume_condition['weather_condition']}",
+            str(highest_volume_condition["weather_condition"]),
             format_number(highest_volume_condition["total_trips"]),
+        )
+
+        st.markdown(
+            f"""
+            <div class="insight-box">
+            <b>Insight:</b> Pada filter cuaca aktif, kondisi <b>{best_condition['weather_condition']}</b>
+            memiliki demand lift tertinggi sebesar <b>{best_condition['demand_lift_pct']:.2f}%</b>.
+            Kondisi dengan volume trip terbesar adalah <b>{highest_volume_condition['weather_condition']}</b>,
+            sehingga interpretasi perlu membedakan antara <i>relative lift</i> dan volume absolut.
+            </div>
+            """,
+            unsafe_allow_html=True,
         )
 
         st.divider()
@@ -783,13 +991,11 @@ with tab_weather:
                     ["total_trips", "avg_precipitation", "avg_rain"],
                 ),
             )
-
             fig_lift.update_layout(
                 xaxis_title="Weather Condition",
                 yaxis_title="Demand Lift (%)",
             )
-
-            st.plotly_chart(update_chart_layout(fig_lift, height=430), width='stretch')
+            st.plotly_chart(update_chart_layout(fig_lift, height=430), use_container_width=True)
 
         with col_right:
             fig_duration = px.bar(
@@ -799,44 +1005,37 @@ with tab_weather:
                 title="Duration Delta by Weather Condition",
                 hover_data=existing_columns(
                     weather_display,
-                    ["avg_duration", "avg_minutes_per_mile"],
+                    ["total_trips", "avg_duration", "avg_trip_duration_minutes"],
                 ),
             )
-
             fig_duration.update_layout(
                 xaxis_title="Weather Condition",
                 yaxis_title="Duration Delta (minutes)",
             )
-
-            st.plotly_chart(update_chart_layout(fig_duration, height=430), width='stretch')
+            st.plotly_chart(update_chart_layout(fig_duration, height=430), use_container_width=True)
 
         st.markdown("### Weather Trade-Off: Demand Lift vs Duration Impact")
 
-        fig_weather_scatter = px.scatter(
+        bubble_size = "total_trips" if "total_trips" in weather_display.columns else None
+
+        fig_tradeoff = px.scatter(
             weather_display,
             x="demand_lift_pct",
             y="duration_delta_minutes",
-            size="total_trips",
+            size=bubble_size,
             color="weather_condition",
             hover_name="weather_condition",
+            title="Weather Impact Positioning",
             hover_data=existing_columns(
                 weather_display,
-                [
-                    "avg_total_amount",
-                    "fare_delta_amount",
-                    "avg_tip_pct",
-                    "tip_delta_pct",
-                ],
+                ["total_trips", "fare_delta_amount", "tip_delta_pct"],
             ),
-            title="Weather Impact Positioning",
         )
-
-        fig_weather_scatter.update_layout(
+        fig_tradeoff.update_layout(
             xaxis_title="Demand Lift (%)",
             yaxis_title="Duration Delta (minutes)",
         )
-
-        st.plotly_chart(update_chart_layout(fig_weather_scatter, height=520), width='stretch')
+        st.plotly_chart(update_chart_layout(fig_tradeoff, height=460), use_container_width=True)
 
         st.markdown("### Weather Impact Table")
         st.dataframe(
@@ -853,20 +1052,13 @@ with tab_weather:
                     "fare_delta_amount",
                     "avg_tip_pct",
                     "tip_delta_pct",
+                    "avg_precipitation",
+                    "avg_rain",
+                    "avg_snowfall",
                 ],
             ),
-            width='stretch',
+            use_container_width=True,
         )
-
-        st.divider()
-        st.subheader("💡 Research Question Insight")
-        st.markdown("""
-        **Apakah hujan meningkatkan demand taxi?**
-        
-        **Iya, hujan terbukti meningkatkan demand.** Secara volume per jam (*hourly rate*), cuaca hujan terutama dengan intensitas tinggi terbukti meningkatkan *demand* taksi secara drastis di New York City hingga mencapai **99.46%** saat terjadi *heavy rain*. 
-        
-        Namun, jika dilihat dari volume trip total, perjalanan kumulatif terbesar tetap dipegang oleh cuaca cerah (*clear*) dengan total **7.439.397 perjalanan**. Hal ini disebabkan oleh faktor frekuensi hari cerah yang jauh lebih mendominasi kalender sepanjang periode analisis (Januari–Maret 2025) dibandingkan dengan hari terjadinya hujan.
-        """)
 
 
 # ============================================================
@@ -876,141 +1068,125 @@ with tab_weather:
 with tab_zone:
     st.subheader("Zone Weather Elasticity")
     st.markdown(
-        f'<div class="section-note">Identifikasi zona yang paling sensitif terhadap cuaca. Filter aktif: <b>{title_borough}</b>, minimum trip per zone-weather: <b>{min_zone_trips}</b>.</div>',
+        '<div class="section-note">Identifikasi zona paling sensitif terhadap cuaca berdasarkan demand lift dan duration impact.</div>',
         unsafe_allow_html=True,
     )
 
     if filtered_zone_elasticity.empty:
-        st.warning("Tidak ada data untuk filter yang dipilih. Coba turunkan Min Zone-Weather Trips.")
+        st.warning("Tidak ada data zone elasticity untuk filter yang dipilih.")
     else:
-        non_clear_zone = filtered_zone_elasticity[
-            filtered_zone_elasticity["weather_condition"].astype(str) != "clear"
-        ].copy()
+        col_left, col_right = st.columns(2)
 
-        if non_clear_zone.empty:
-            st.warning("Tidak ada data non-clear weather untuk filter yang dipilih.")
-        else:
-            col_left, col_right = st.columns(2)
+        with col_left:
+            st.markdown("### Top Demand Lift Zones")
 
-            with col_left:
-                st.markdown("### Top Demand Lift Zones")
+            top_lift = (
+                filtered_zone_elasticity
+                .sort_values("demand_lift_pct", ascending=False)
+                .head(top_n)
+            )
 
-                top_demand_lift = (
-                    non_clear_zone.sort_values("demand_lift_pct", ascending=False)
-                    .head(top_n)
-                )
-                
-                # print(top_demand_lift)
-
-                fig_top_lift = px.bar(
-                    top_demand_lift,
-                    x="demand_lift_pct",
-                    y="pickup_zone",
-                    color="weather_condition",
-                    orientation="h",
-                    title=f"Top {top_n} Zones by Demand Lift",
-                    hover_data=existing_columns(
-                        top_demand_lift,
-                        [
-                            "pickup_borough",
-                            "total_trips",
-                            "duration_delta_minutes",
-                            "weather_sensitivity_label",
-                        ],
-                    ),
-                )
-
-                fig_top_lift.update_layout(
-                    xaxis_title="Demand Lift (%)",
-                    yaxis_title="Pickup Zone",
-                    yaxis={"categoryorder": "total ascending"},
-                )
-
-                st.plotly_chart(update_chart_layout(fig_top_lift, height=470), width='stretch')
-
-            with col_right:
-                st.markdown("### Top Duration Impact Zones")
-
-                top_duration = (
-                    non_clear_zone.sort_values("duration_delta_minutes", ascending=False)
-                    .head(top_n)
-                )
-
-                fig_top_duration = px.bar(
-                    top_duration,
-                    x="duration_delta_minutes",
-                    y="pickup_zone",
-                    color="weather_condition",
-                    orientation="h",
-                    title=f"Top {top_n} Zones by Duration Impact",
-                    hover_data=existing_columns(
-                        top_duration,
-                        [
-                            "pickup_borough",
-                            "total_trips",
-                            "demand_lift_pct",
-                            "weather_sensitivity_label",
-                        ],
-                    ),
-                )
-
-                fig_top_duration.update_layout(
-                    xaxis_title="Duration Delta (minutes)",
-                    yaxis_title="Pickup Zone",
-                    yaxis={"categoryorder": "total ascending"},
-                )
-
-                st.plotly_chart(update_chart_layout(fig_top_duration, height=470), width='stretch')
-
-            st.markdown("### Demand Lift vs Duration Impact by Zone")
-
-            fig_zone_scatter = px.scatter(
-                non_clear_zone,
+            fig_top_lift = px.bar(
+                top_lift.sort_values("demand_lift_pct", ascending=True),
                 x="demand_lift_pct",
-                y="duration_delta_minutes",
-                size="total_trips",
-                color="weather_sensitivity_label",
-                hover_name="pickup_zone",
+                y="pickup_zone",
+                color="weather_condition",
+                orientation="h",
+                title=f"Top {top_n} Zones by Demand Lift",
                 hover_data=existing_columns(
-                    non_clear_zone,
-                    [
-                        "pickup_borough",
-                        "weather_condition",
-                        "avg_total_amount",
-                        "fare_delta_amount",
-                        "tip_delta_pct",
-                    ],
+                    top_lift,
+                    ["pickup_borough", "total_trips", "duration_delta_minutes"],
                 ),
-                title="Zone Elasticity Positioning",
             )
-
-            fig_zone_scatter.update_layout(
+            fig_top_lift.update_layout(
                 xaxis_title="Demand Lift (%)",
-                yaxis_title="Duration Delta (minutes)",
+                yaxis_title="Pickup Zone",
+            )
+            st.plotly_chart(update_chart_layout(fig_top_lift, height=470), use_container_width=True)
+
+        with col_right:
+            st.markdown("### Top Duration Impact Zones")
+
+            top_duration = (
+                filtered_zone_elasticity
+                .sort_values("duration_delta_minutes", ascending=False)
+                .head(top_n)
             )
 
-            st.plotly_chart(update_chart_layout(fig_zone_scatter, height=560), width='stretch')
-
-            st.markdown("### Zone Elasticity Data")
-            st.dataframe(
-                safe_dataframe(
-                    non_clear_zone.sort_values("demand_lift_pct", ascending=False),
-                    [
-                        "zone_id",
-                        "pickup_borough",
-                        "pickup_zone",
-                        "weather_condition",
-                        "total_trips",
-                        "demand_lift_pct",
-                        "duration_delta_minutes",
-                        "minutes_per_mile_delta",
-                        "fare_delta_amount",
-                        "tip_delta_pct",
-                        "weather_sensitivity_label",
-                    ],
+            fig_top_duration = px.bar(
+                top_duration.sort_values("duration_delta_minutes", ascending=True),
+                x="duration_delta_minutes",
+                y="pickup_zone",
+                color="weather_condition",
+                orientation="h",
+                title=f"Top {top_n} Zones by Duration Impact",
+                hover_data=existing_columns(
+                    top_duration,
+                    ["pickup_borough", "total_trips", "demand_lift_pct"],
                 ),
-                width='stretch',
             )
+            fig_top_duration.update_layout(
+                xaxis_title="Duration Delta (minutes)",
+                yaxis_title="Pickup Zone",
+            )
+            st.plotly_chart(update_chart_layout(fig_top_duration, height=470), use_container_width=True)
+
+        st.markdown("### Demand Lift vs Duration Impact by Zone")
+
+        size_col = "total_trips" if "total_trips" in filtered_zone_elasticity.columns else None
+        color_col = (
+            "weather_sensitivity_label"
+            if "weather_sensitivity_label" in filtered_zone_elasticity.columns
+            else "weather_condition"
+        )
+
+        fig_zone_scatter = px.scatter(
+            filtered_zone_elasticity,
+            x="demand_lift_pct",
+            y="duration_delta_minutes",
+            size=size_col,
+            color=color_col,
+            hover_name="pickup_zone",
+            hover_data=existing_columns(
+                filtered_zone_elasticity,
+                [
+                    "pickup_borough",
+                    "weather_condition",
+                    "total_trips",
+                    "minutes_per_mile_delta",
+                    "fare_delta_amount",
+                    "tip_delta_pct",
+                ],
+            ),
+            title="Zone Elasticity Positioning",
+        )
+        fig_zone_scatter.update_layout(
+            xaxis_title="Demand Lift (%)",
+            yaxis_title="Duration Delta (minutes)",
+        )
+        st.plotly_chart(update_chart_layout(fig_zone_scatter, height=520), use_container_width=True)
+
+        st.markdown("### Zone Elasticity Data")
+        st.dataframe(
+            safe_dataframe(
+                filtered_zone_elasticity,
+                [
+                    "zone_id",
+                    "pickup_location_id",
+                    "pickup_borough",
+                    "pickup_zone",
+                    "weather_condition",
+                    "total_trips",
+                    "demand_lift_pct",
+                    "duration_delta_minutes",
+                    "minutes_per_mile_delta",
+                    "fare_delta_amount",
+                    "tip_delta_pct",
+                    "weather_sensitivity_label",
+                ],
+            ),
+            use_container_width=True,
+        )
 
 
 # ============================================================
@@ -1025,235 +1201,236 @@ with tab_od:
     )
 
     if filtered_od_flow.empty:
-        st.warning("Tidak ada OD flow untuk filter yang dipilih.")
+        st.warning(f"Tidak ada OD flow untuk filter Borough = {selected_borough}.")
     else:
         od_display = filtered_od_flow.copy()
-        od_display["route"] = od_display["origin_zone"] + " → " + od_display["destination_zone"]
 
-        top_routes = od_display.sort_values("trip_count", ascending=False).head(top_n)
+        origin_col = first_existing_column(od_display, ["origin_zone", "pickup_zone"])
+        dest_col = first_existing_column(od_display, ["destination_zone", "dropoff_zone"])
+        trip_col = first_existing_column(od_display, ["trip_count", "total_trips"])
 
-        fig_routes = px.bar(
-            top_routes,
-            x="trip_count",
-            y="route",
-            color="weather_condition",
-            orientation="h",
-            title=f"Top {top_n} OD Routes",
-            hover_data=existing_columns(
-                top_routes,
-                [
-                    "origin_borough",
-                    "destination_borough",
-                    "avg_duration",
-                    "avg_trip_distance",
-                    "total_revenue",
-                    "avg_tip_pct",
-                ],
-            ),
-        )
+        if origin_col is None or dest_col is None or trip_col is None:
+            st.warning("Kolom OD flow tidak lengkap untuk visualisasi.")
+        else:
+            od_display["route"] = (
+                od_display[origin_col].astype(str)
+                + " → "
+                + od_display[dest_col].astype(str)
+            )
 
-        fig_routes.update_layout(
-            xaxis_title="Trip Count",
-            yaxis_title="Route",
-            yaxis={"categoryorder": "total ascending"},
-        )
+            top_routes = (
+                od_display
+                .sort_values(trip_col, ascending=False)
+                .head(top_n)
+            )
 
-        st.plotly_chart(update_chart_layout(fig_routes, height=540), width='stretch')
+            fig_routes = px.bar(
+                top_routes.sort_values(trip_col, ascending=True),
+                x=trip_col,
+                y="route",
+                color="weather_condition" if "weather_condition" in top_routes.columns else None,
+                orientation="h",
+                title=f"Top {top_n} OD Routes",
+                hover_data=existing_columns(
+                    top_routes,
+                    [
+                        "origin_borough",
+                        "destination_borough",
+                        "avg_duration",
+                        "avg_trip_distance",
+                        "avg_speed_mph",
+                        "total_revenue",
+                        "avg_total_amount",
+                    ],
+                ),
+            )
+            fig_routes.update_layout(
+                xaxis_title="Trip Count",
+                yaxis_title="Route",
+            )
+            st.plotly_chart(update_chart_layout(fig_routes, height=540), use_container_width=True)
 
-        st.markdown("### OD Flow Table")
-
-        st.dataframe(
-            safe_dataframe(
-                top_routes,
-                [
-                    "origin_borough",
-                    "origin_zone",
-                    "destination_borough",
-                    "destination_zone",
-                    "weather_condition",
-                    "trip_count",
-                    "avg_duration",
-                    "avg_trip_distance",
-                    "avg_speed_mph",
-                    "total_revenue",
-                    "avg_total_amount",
-                    "avg_tip_pct",
-                ],
-            ),
-            width='stretch',
-        )
+            st.markdown("### OD Flow Table")
+            st.dataframe(
+                safe_dataframe(
+                    top_routes,
+                    [
+                        "origin_borough",
+                        "origin_zone",
+                        "destination_borough",
+                        "destination_zone",
+                        "weather_condition",
+                        trip_col,
+                        "avg_duration",
+                        "avg_trip_distance",
+                        "avg_speed_mph",
+                        "total_revenue",
+                        "avg_total_amount",
+                        "avg_tip_pct",
+                    ],
+                ),
+                use_container_width=True,
+            )
 
 
 # ============================================================
-# TAB 5: ML DEMAND PREDICTION
+# TAB 5: DEMAND PREDICTION
 # ============================================================
 
 with tab_prediction:
     st.subheader("ML Demand Prediction")
     st.markdown(
-        f'<div class="section-note">Model Random Forest digunakan untuk memprediksi jumlah trip per zona dan jam berdasarkan fitur waktu, lokasi, dan cuaca. Grafik prediction mengikuti filter: <b>{title_borough}</b>.</div>',
+        '<div class="section-note">Random Forest digunakan untuk memprediksi jumlah trip per zona dan jam berdasarkan fitur waktu, lokasi, dan cuaca.</div>',
         unsafe_allow_html=True,
     )
 
     metrics = demand_metrics.get("metrics", {})
-    baseline = demand_metrics.get("baseline_metrics", {})
+    baseline_metrics = demand_metrics.get("baseline_metrics", {})
+
+    mae = metrics.get("mae", 0)
+    rmse = metrics.get("rmse", 0)
+    r2 = metrics.get("r2", 0)
+    mape = metrics.get("mape_percent", 0)
+
+    baseline_mae = baseline_metrics.get("baseline_mean_mae", 0)
+    baseline_rmse = baseline_metrics.get("baseline_mean_rmse", 0)
 
     col1, col2, col3, col4 = st.columns(4)
-
-    col1.metric(
-        "MAE",
-        f"{metrics.get('mae', 0):.2f}",
-        f"Baseline {baseline.get('baseline_mean_mae', 0):.2f}",
-    )
-    col2.metric(
-        "RMSE",
-        f"{metrics.get('rmse', 0):.2f}",
-        f"Baseline {baseline.get('baseline_mean_rmse', 0):.2f}",
-    )
-    col3.metric("R²", f"{metrics.get('r2', 0):.3f}")
-    col4.metric("MAPE", f"{metrics.get('mape_percent', 0):.2f}%")
-
-    st.caption(
-        "Metric model di atas adalah hasil evaluasi global pada test set Maret 2025. "
-        "Chart di bawah mengikuti filter sidebar."
-    )
+    col1.metric("MAE", f"{mae:.2f}", delta=f"Baseline {baseline_mae:.2f}", delta_color="inverse")
+    col2.metric("RMSE", f"{rmse:.2f}", delta=f"Baseline {baseline_rmse:.2f}", delta_color="inverse")
+    col3.metric("R²", f"{r2:.3f}")
+    col4.metric("MAPE", f"{mape:.2f}%")
 
     st.divider()
 
-    if filtered_demand_results.empty:
-        st.warning("Tidak ada prediction result untuk filter yang dipilih.")
+    actual_col, predicted_col, abs_error_col = get_prediction_columns(filtered_demand_results)
+
+    if filtered_demand_results.empty or actual_col is None or predicted_col is None:
+        st.warning("Data hasil prediksi tidak tersedia untuk filter yang dipilih.")
     else:
         col_left, col_right = st.columns(2)
 
         with col_left:
             st.markdown("### Actual vs Predicted Daily Demand")
 
-            pred_daily = (
-                filtered_demand_results.groupby("pickup_date", as_index=False)
-                .agg(
-                    actual_total_trips=("total_trips", "sum"),
-                    predicted_total_trips=("predicted_total_trips", "sum"),
+            if "pickup_date" in filtered_demand_results.columns:
+                daily_prediction = (
+                    filtered_demand_results.groupby("pickup_date", as_index=False)
+                    .agg(
+                        actual_total_trips=(actual_col, "sum"),
+                        predicted_total_trips=(predicted_col, "sum"),
+                    )
+                    .sort_values("pickup_date")
                 )
-                .sort_values("pickup_date")
-            )
 
-            pred_daily_long = pred_daily.melt(
-                id_vars="pickup_date",
-                value_vars=["actual_total_trips", "predicted_total_trips"],
-                var_name="series",
-                value_name="trips",
-            )
+                daily_prediction_long = daily_prediction.melt(
+                    id_vars="pickup_date",
+                    value_vars=["actual_total_trips", "predicted_total_trips"],
+                    var_name="series",
+                    value_name="trips",
+                )
 
-            fig_pred_daily = px.line(
-                pred_daily_long,
-                x="pickup_date",
-                y="trips",
-                color="series",
-                markers=True,
-                title="Actual vs Predicted Total Trips by Date",
-            )
-
-            fig_pred_daily.update_layout(
-                xaxis_title="Pickup Date",
-                yaxis_title="Trips",
-                hovermode="x unified",
-            )
-
-            st.plotly_chart(update_chart_layout(fig_pred_daily, height=450), width='stretch')
+                fig_prediction_daily = px.line(
+                    daily_prediction_long,
+                    x="pickup_date",
+                    y="trips",
+                    color="series",
+                    markers=True,
+                    title="Actual vs Predicted Total Trips by Date",
+                )
+                fig_prediction_daily.update_layout(
+                    xaxis_title="Pickup Date",
+                    yaxis_title="Trips",
+                    hovermode="x unified",
+                )
+                st.plotly_chart(update_chart_layout(fig_prediction_daily, height=430), use_container_width=True)
+            else:
+                st.warning("Kolom pickup_date tidak tersedia pada prediction results.")
 
         with col_right:
             st.markdown("### Feature Importance")
 
-            top_features = (
-                feature_importance_df.sort_values("importance", ascending=False)
-                .head(15)
-            )
+            if feature_importance_df.empty:
+                st.warning("Feature importance tidak tersedia.")
+            else:
+                feature_display = feature_importance_df.sort_values("importance", ascending=False).head(15)
 
-            fig_importance = px.bar(
-                top_features,
-                x="importance",
-                y="feature",
-                orientation="h",
-                title="Top Feature Importance",
-            )
-
-            fig_importance.update_layout(
-                xaxis_title="Importance",
-                yaxis_title="Feature",
-                yaxis={"categoryorder": "total ascending"},
-            )
-
-            st.plotly_chart(update_chart_layout(fig_importance, height=450), width='stretch')
+                fig_importance = px.bar(
+                    feature_display.sort_values("importance", ascending=True),
+                    x="importance",
+                    y="feature",
+                    orientation="h",
+                    title="Top Feature Importance",
+                )
+                fig_importance.update_layout(
+                    xaxis_title="Importance",
+                    yaxis_title="Feature",
+                )
+                st.plotly_chart(update_chart_layout(fig_importance, height=430), use_container_width=True)
 
         st.markdown("### Prediction Error Analysis")
 
         col_left, col_right = st.columns(2)
 
         with col_left:
-            sample_df = filtered_demand_results.sample(
-                min(5000, len(filtered_demand_results)),
-                random_state=42,
-            )
+            color_col = "weather_condition" if "weather_condition" in filtered_demand_results.columns else None
 
-            fig_actual_pred = px.scatter(
-                sample_df,
-                x="total_trips",
-                y="predicted_total_trips",
-                color="weather_condition",
+            fig_error_scatter = px.scatter(
+                filtered_demand_results,
+                x=actual_col,
+                y=predicted_col,
+                color=color_col,
+                title="Actual vs Predicted Trips",
                 hover_data=existing_columns(
-                    sample_df,
+                    filtered_demand_results,
+                    ["pickup_date", "pickup_hour", "pickup_borough", "pickup_zone", "weather_condition"],
+                ),
+            )
+            fig_error_scatter.update_layout(
+                xaxis_title="Actual Trips",
+                yaxis_title="Predicted Trips",
+            )
+            st.plotly_chart(update_chart_layout(fig_error_scatter, height=430), use_container_width=True)
+
+        with col_right:
+            if abs_error_col is None:
+                error_df = filtered_demand_results.copy()
+                error_df["absolute_error"] = (
+                    error_df[actual_col] - error_df[predicted_col]
+                ).abs()
+                abs_error_col = "absolute_error"
+            else:
+                error_df = filtered_demand_results.copy()
+
+            fig_error_hist = px.histogram(
+                error_df,
+                x=abs_error_col,
+                nbins=60,
+                title="Distribution of Absolute Prediction Error",
+            )
+            fig_error_hist.update_layout(
+                xaxis_title="Absolute Error",
+                yaxis_title="Row Count",
+            )
+            st.plotly_chart(update_chart_layout(fig_error_hist, height=430), use_container_width=True)
+
+        with st.expander("Prediction Results Sample"):
+            st.dataframe(
+                safe_dataframe(
+                    filtered_demand_results.head(100),
                     [
                         "pickup_date",
                         "pickup_hour",
                         "pickup_borough",
                         "pickup_zone",
-                        "absolute_error",
+                        "weather_condition",
+                        actual_col,
+                        predicted_col,
+                        abs_error_col,
                     ],
                 ),
-                title="Actual vs Predicted Trips",
+                use_container_width=True,
             )
-
-            fig_actual_pred.update_layout(
-                xaxis_title="Actual Trips",
-                yaxis_title="Predicted Trips",
-            )
-
-            st.plotly_chart(update_chart_layout(fig_actual_pred, height=500), width='stretch')
-
-        with col_right:
-            fig_error = px.histogram(
-                filtered_demand_results,
-                x="absolute_error",
-                nbins=50,
-                title="Distribution of Absolute Prediction Error",
-            )
-
-            fig_error.update_layout(
-                xaxis_title="Absolute Error",
-                yaxis_title="Row Count",
-            )
-
-            st.plotly_chart(update_chart_layout(fig_error, height=500), width='stretch')
-
-        st.markdown("### Prediction Results Sample")
-
-        st.dataframe(
-            safe_dataframe(
-                filtered_demand_results.sort_values("absolute_error", ascending=False).head(100),
-                [
-                    "pickup_date",
-                    "pickup_hour",
-                    "pickup_borough",
-                    "pickup_zone",
-                    "weather_condition",
-                    "total_trips",
-                    "predicted_total_trips",
-                    "prediction_error",
-                    "absolute_error",
-                ],
-            ),
-            width='stretch',
-        )
 
 
 # ============================================================
@@ -1263,60 +1440,60 @@ with tab_prediction:
 with tab_cluster:
     st.subheader("ML Zone Weather Sensitivity Clustering")
     st.markdown(
-        f'<div class="section-note">KMeans digunakan untuk mengelompokkan zona berdasarkan demand lift, duration impact, fare/tip delta, precipitation, dan volume trip saat cuaca buruk. Filter aktif: <b>{title_borough}</b>.</div>',
+        '<div class="section-note">KMeans digunakan untuk mengelompokkan zona berdasarkan demand lift, duration impact, fare/tip delta, precipitation, dan volume trip saat cuaca buruk.</div>',
         unsafe_allow_html=True,
     )
 
-    cluster_meta = pd.DataFrame(cluster_summary.get("cluster_summary", []))
-
-    n_clusters = cluster_summary.get("n_clusters", zone_clusters_df["cluster_id"].nunique())
-    silhouette = cluster_summary.get("silhouette_score", None)
+    n_clusters = cluster_summary.get("n_clusters", filtered_clusters["cluster_id"].nunique() if "cluster_id" in filtered_clusters.columns else 0)
+    silhouette_score = cluster_summary.get("silhouette_score", 0)
+    n_samples = cluster_summary.get("n_samples", len(zone_clusters_df))
 
     col1, col2, col3 = st.columns(3)
-
-    col1.metric("Filtered Zones", format_number(len(filtered_clusters)))
-    col2.metric("Global Clusters", format_number(n_clusters))
-    col3.metric("Silhouette Score", f"{silhouette:.3f}" if silhouette is not None else "N/A")
+    col1.metric("Total Zones", format_number(n_samples))
+    col2.metric("Clusters", format_number(n_clusters))
+    col3.metric("Silhouette Score", f"{silhouette_score:.3f}")
 
     st.divider()
 
     if filtered_clusters.empty:
         st.warning("Tidak ada data cluster untuk filter yang dipilih.")
     else:
-        col_left, col_right = st.columns(2)
+        cluster_col = "cluster_profile" if "cluster_profile" in filtered_clusters.columns else "cluster_id"
+
+        col_left, col_right = st.columns([1, 1])
 
         with col_left:
             st.markdown("### Cluster Distribution")
 
-            cluster_count = (
-                filtered_clusters.groupby(["cluster_id", "cluster_profile"], as_index=False)
-                .agg(zone_count=("zone_id", "count"))
-                .sort_values("cluster_id")
+            cluster_dist = (
+                filtered_clusters.groupby(cluster_col, as_index=False)
+                .agg(zone_count=("pickup_zone", "nunique") if "pickup_zone" in filtered_clusters.columns else ("cluster_id", "size"))
+                .sort_values("zone_count", ascending=False)
             )
 
-            fig_cluster_count = px.bar(
-                cluster_count,
-                x="cluster_profile",
+            fig_cluster_dist = px.bar(
+                cluster_dist,
+                x=cluster_col,
                 y="zone_count",
-                color="cluster_profile",
                 title="Number of Zones by Cluster Profile",
             )
-
-            fig_cluster_count.update_layout(
+            fig_cluster_dist.update_layout(
                 xaxis_title="Cluster Profile",
                 yaxis_title="Zone Count",
-                showlegend=False,
             )
-
-            st.plotly_chart(update_chart_layout(fig_cluster_count, height=450), width='stretch')
+            st.plotly_chart(update_chart_layout(fig_cluster_dist, height=430), use_container_width=True)
 
         with col_right:
             st.markdown("### Cluster Summary")
 
-            if not cluster_meta.empty:
+            cluster_summary_df = pd.DataFrame(cluster_summary.get("cluster_summary", []))
+
+            if cluster_summary_df.empty:
+                st.warning("Cluster summary JSON tidak tersedia.")
+            else:
                 st.dataframe(
                     safe_dataframe(
-                        cluster_meta,
+                        cluster_summary_df,
                         [
                             "cluster_id",
                             "cluster_profile",
@@ -1326,120 +1503,106 @@ with tab_cluster:
                             "avg_duration_delta_minutes",
                             "avg_fare_delta_amount",
                             "avg_tip_delta_pct",
+                            "high_sensitive_condition_count",
                         ],
                     ),
-                    width='stretch',
+                    use_container_width=True,
                 )
-            else:
-                st.info("Cluster summary tidak tersedia.")
 
         st.markdown("### Cluster Positioning")
 
-        fig_cluster_scatter = px.scatter(
-            filtered_clusters,
-            x="avg_demand_lift_pct",
-            y="avg_duration_delta_minutes",
-            size="total_weather_trips",
-            color="cluster_profile",
-            hover_name="pickup_zone",
-            hover_data=existing_columns(
-                filtered_clusters,
-                [
-                    "pickup_borough",
-                    "avg_fare_delta_amount",
-                    "avg_tip_delta_pct",
-                    "avg_precipitation",
-                    "total_weather_trips",
-                ],
-            ),
-            title="Demand Lift vs Duration Impact by Cluster",
-        )
+        x_col = first_existing_column(filtered_clusters, ["avg_demand_lift_pct", "demand_lift_pct"])
+        y_col = first_existing_column(filtered_clusters, ["avg_duration_delta_minutes", "duration_delta_minutes"])
+        size_col = first_existing_column(filtered_clusters, ["total_weather_trips", "total_trips"])
 
-        fig_cluster_scatter.update_layout(
-            xaxis_title="Average Demand Lift (%)",
-            yaxis_title="Average Duration Delta (minutes)",
-        )
-
-        st.plotly_chart(update_chart_layout(fig_cluster_scatter, height=560), width='stretch')
-
-        st.markdown("### High-Volume High Demand Lift Zones")
-
-        high_demand_cluster = filtered_clusters[
-            filtered_clusters["cluster_profile"].str.contains(
-                "High-volume high demand lift",
-                case=False,
-                na=False,
-            )
-        ].copy()
-
-        if high_demand_cluster.empty:
-            st.info("Tidak ada zona dengan cluster profile High-volume high demand lift pada filter ini.")
+        if x_col is None or y_col is None:
+            st.warning("Kolom demand lift atau duration delta tidak tersedia untuk scatter cluster.")
         else:
-            top_cluster_zones = high_demand_cluster.sort_values(
-                ["total_weather_trips", "avg_demand_lift_pct"],
-                ascending=[False, False],
-            ).head(top_n)
-
-            fig_high_cluster = px.bar(
-                top_cluster_zones,
-                x="total_weather_trips",
-                y="pickup_zone",
-                color="pickup_borough",
-                color_discrete_map=BOROUGH_COLOR_MAP,
-                orientation="h",
-                title=f"Top {top_n} High-Volume High Demand Lift Zones",
+            fig_cluster_scatter = px.scatter(
+                filtered_clusters,
+                x=x_col,
+                y=y_col,
+                size=size_col,
+                color=cluster_col,
+                hover_name="pickup_zone" if "pickup_zone" in filtered_clusters.columns else None,
                 hover_data=existing_columns(
-                    top_cluster_zones,
+                    filtered_clusters,
                     [
+                        "pickup_borough",
+                        "total_weather_trips",
+                        "avg_fare_delta_amount",
+                        "avg_tip_delta_pct",
+                        "avg_precipitation",
+                    ],
+                ),
+                title="Demand Lift vs Duration Impact by Cluster",
+            )
+            fig_cluster_scatter.update_layout(
+                xaxis_title="Average Demand Lift (%)",
+                yaxis_title="Average Duration Delta (minutes)",
+            )
+            st.plotly_chart(update_chart_layout(fig_cluster_scatter, height=520), use_container_width=True)
+
+        st.markdown("### High-Impact Zone Candidates")
+
+        candidate_df = filtered_clusters.copy()
+
+        if "cluster_profile" in candidate_df.columns:
+            candidate_df = candidate_df[
+                candidate_df["cluster_profile"].astype(str).str.contains(
+                    "high|lift|demand|sensitive",
+                    case=False,
+                    na=False,
+                )
+            ]
+
+        sort_col = first_existing_column(candidate_df, ["avg_demand_lift_pct", "total_weather_trips", "total_trips"])
+
+        if sort_col is not None and not candidate_df.empty:
+            candidate_df = candidate_df.sort_values(sort_col, ascending=False).head(top_n)
+
+            st.dataframe(
+                safe_dataframe(
+                    candidate_df,
+                    [
+                        "pickup_borough",
+                        "pickup_zone",
+                        "cluster_id",
+                        "cluster_profile",
+                        "total_weather_trips",
                         "avg_demand_lift_pct",
                         "avg_duration_delta_minutes",
                         "avg_fare_delta_amount",
                         "avg_tip_delta_pct",
                     ],
                 ),
+                use_container_width=True,
             )
+        else:
+            st.info("Tidak ada candidate high-impact zone pada filter saat ini.")
 
-            fig_high_cluster.update_layout(
-                xaxis_title="Total Weather Trips",
-                yaxis_title="Pickup Zone",
-                yaxis={"categoryorder": "total ascending"},
-            )
-
-            st.plotly_chart(update_chart_layout(fig_high_cluster, height=470), width='stretch')
-
-        st.markdown("### Zone Cluster Data")
-
-        st.dataframe(
-            safe_dataframe(
-                filtered_clusters.sort_values(
-                    ["cluster_id", "total_weather_trips"],
-                    ascending=[True, False],
+        with st.expander("All Clustered Zones"):
+            st.dataframe(
+                safe_dataframe(
+                    filtered_clusters,
+                    [
+                        "pickup_borough",
+                        "pickup_zone",
+                        "cluster_id",
+                        "cluster_profile",
+                        "total_weather_trips",
+                        "avg_demand_lift_pct",
+                        "avg_duration_delta_minutes",
+                        "avg_fare_delta_amount",
+                        "avg_tip_delta_pct",
+                    ],
                 ),
-                [
-                    "zone_id",
-                    "pickup_borough",
-                    "pickup_zone",
-                    "cluster_id",
-                    "cluster_profile",
-                    "total_weather_trips",
-                    "avg_demand_lift_pct",
-                    "avg_duration_delta_minutes",
-                    "avg_minutes_per_mile_delta",
-                    "avg_fare_delta_amount",
-                    "avg_tip_delta_pct",
-                    "avg_precipitation",
-                ],
-            ),
-            width='stretch',
-        )
+                use_container_width=True,
+            )
 
-
-# ============================================================
-# FOOTER
-# ============================================================
 
 st.divider()
 st.caption(
-    "Built with Streamlit, DuckDB, Apache Airflow, and scikit-learn. "
+    "Built with Streamlit, DuckDB, Apache Airflow, Parquet, and scikit-learn. "
     "Pipeline period: January–March 2025."
 )
