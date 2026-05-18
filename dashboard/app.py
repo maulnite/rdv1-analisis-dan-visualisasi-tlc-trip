@@ -1375,7 +1375,7 @@ with tab_zone:
                         colorbar=dict(tickvals=tick_vals, ticktext=tick_text)
                     )
 
-                st.plotly_chart(fig_map, width='content')
+                st.plotly_chart(fig_map, width='stretch')
 
                 # caption
                 if is_diverging:
@@ -1856,7 +1856,3 @@ with tab_cluster:
 
 
 st.divider()
-st.caption(
-    "Built with Streamlit, DuckDB, Apache Airflow, Parquet, and scikit-learn. "
-    "Pipeline period: January–March 2025."
-)
