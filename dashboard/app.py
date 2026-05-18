@@ -17,9 +17,7 @@ from plotly.subplots import make_subplots
 import streamlit as st
 
 
-# ============================================================
-# PAGE CONFIG
-# ============================================================
+# Config
 
 st.set_page_config(
     page_title="NYC TLC Weather Analytics",
@@ -48,12 +46,19 @@ BOROUGH_COLOR_MAP = {
     "EWR": "#19D3F3",
 }
 
+WEATHER_COLOR_MAP = {
+    "clear": "#636EFA",
+    "heavy_rain": "#EF553B",
+    "snow": "#00CC96",
+    "moderate_rain": "#AB63FA",
+    "light_rain": "#FFA15A",
+}
+
+
 px.defaults.template = "plotly_dark"
 
 
-# ============================================================
-# STYLING
-# ============================================================
+# Style 
 
 st.markdown(
     """
@@ -153,9 +158,7 @@ st.markdown(
 )
 
 
-# ============================================================
-# HELPER FUNCTIONS
-# ============================================================
+# Utils Functions
 
 def file_must_exist(path: Path) -> Path:
     if not path.exists() or path.stat().st_size == 0:
@@ -424,9 +427,7 @@ def get_prediction_columns(df: pd.DataFrame) -> tuple[str | None, str | None, st
     return actual_col, predicted_col, abs_error_col
 
 
-# ============================================================
-# LOAD DATA
-# ============================================================
+# Loading Data
 
 daily_df = read_parquet(str(CURATED_DIR / f"agg_daily_summary_{PERIOD}.parquet"))
 zone_df = read_parquet(str(CURATED_DIR / f"agg_zone_summary_{PERIOD}.parquet"))
@@ -445,9 +446,7 @@ zone_clusters_df = read_parquet(str(ML_DIR / f"zone_weather_clusters_{PERIOD}.pa
 cluster_summary = read_json(str(ML_DIR / f"zone_cluster_summary_{PERIOD}.json"))
 
 
-# ============================================================
-# BASIC DATA PREP
-# ============================================================
+# Data Prep
 
 for df in [daily_df, weather_hourly_df, demand_results_df]:
     if "pickup_date" in df.columns:
@@ -462,9 +461,7 @@ zone_elasticity_df = apply_weather_order(zone_elasticity_df)
 od_flow_df = apply_weather_order(od_flow_df)
 
 
-# ============================================================
-# HEADER
-# ============================================================
+# Header
 
 st.markdown(
     '<div class="main-title">ðŸš• NYC TLC Weather Analytics & ML Dashboard</div>',
@@ -482,9 +479,7 @@ st.caption(
 )
 
 
-# ============================================================
-# SIDEBAR FILTERS
-# ============================================================
+# Sidebar
 
 st.sidebar.title("Dashboard Filters")
 
@@ -519,7 +514,7 @@ active_weather_conditions = selected_weather if selected_weather else weather_op
 top_n = st.sidebar.slider(
     "Top N",
     min_value=5,
-    max_value=30,
+    max_value=100,
     value=10,
     step=5,
 )
@@ -543,10 +538,7 @@ days = st.sidebar.selectbox(
 title_borough = "All Boroughs" if selected_borough == "All" else selected_borough
 
 
-# ============================================================
-# FILTERED DATASETS
-# ============================================================
-
+# Filter
 filtered_zone_elasticity = zone_elasticity_df.copy()
 filtered_od_flow = od_flow_df.copy()
 filtered_clusters = zone_clusters_df.copy()
@@ -582,10 +574,7 @@ filtered_zone_summary_from_weather = build_zone_summary_from_hourly(
 )
 
 
-# ============================================================
-# TABS
-# ============================================================
-
+# Tabs
 tab_overview, tab_weather, tab_zone, tab_od, tab_prediction, tab_cluster = st.tabs(
     [
         "ðŸ“Œ Executive Overview",
@@ -598,9 +587,7 @@ tab_overview, tab_weather, tab_zone, tab_od, tab_prediction, tab_cluster = st.ta
 )
 
 
-# ============================================================
-# TAB 1: EXECUTIVE OVERVIEW
-# ============================================================
+# --- EXECUTIVE OVERVIEW ---
 
 with tab_overview:
     st.subheader("Executive Overview")
@@ -716,7 +703,7 @@ with tab_overview:
                 title="Pickup Date",
             )
 
-            st.plotly_chart(update_chart_layout(fig_daily, height=430), use_container_width=True)
+            st.plotly_chart(update_chart_layout(fig_daily, height=430), width='stretch')
 
     with col_right:
         st.markdown("### Top Pickup Zones")
@@ -748,9 +735,10 @@ with tab_overview:
                 xaxis_title="Total Trips",
                 yaxis_title="Pickup Zone",
                 legend_title="Borough",
+                yaxis={"categoryorder": "total ascending"},
             )
 
-            st.plotly_chart(update_chart_layout(fig_zone, height=430), use_container_width=True)
+            st.plotly_chart(update_chart_layout(fig_zone, height=430), width='stretch')
 
     st.markdown("### Hourly Demand Pattern")
 
@@ -813,14 +801,10 @@ with tab_overview:
             hovermode="x unified",
         )
 
-        st.plotly_chart(update_chart_layout(fig_hourly, height=440), use_container_width=True)
+        st.plotly_chart(update_chart_layout(fig_hourly, height=440), width='stretch')
 
     st.divider()
     st.markdown("### NYC Taxi Demand GeoMap")
-    st.markdown(
-        '<div class="section-note">Peta choropleth menggunakan file lokal <code>dashboard/assets/taxi_zones.geojson</code>. Data metrik tetap berasal dari hasil pipeline.</div>',
-        unsafe_allow_html=True,
-    )
 
     taxi_zones_geojson = read_geojson(str(TAXI_ZONES_GEOJSON_PATH))
 
@@ -840,22 +824,21 @@ with tab_overview:
             geomap_data["map_id"] = normalize_location_id_series(geomap_data["pickup_location_id"])
             geomap_data = geomap_data.dropna(subset=["map_id"])
 
-            map_level = st.radio(
+            map_level = st.selectbox(
                 "Level Agregasi Peta",
-                ["Per Borough", "Per Zona"],
-                horizontal=True,
+                ["Per Zona Taxi", "Per Borough"],
             )
 
             map_metric = st.selectbox(
                 "Metrik Peta",
-                ["Total Trips", "Average Fare", "Average Duration", "Average Distance"],
+                ["Total Trips", "Average Fare (USD)", "Average Duration (Min)", "Average Distance (Miles)"],
             )
 
             metric_config = {
                 "Total Trips": ("total_trips", "Total Trips", True),
-                "Average Fare": ("avg_total_amount", "Average Fare", False),
-                "Average Duration": ("avg_trip_duration_minutes", "Average Duration", False),
-                "Average Distance": ("avg_trip_distance", "Average Distance", False),
+                "Average Fare (USD)": ("avg_total_amount", "Average Fare (USD)", False),
+                "Average Duration (Min)": ("avg_trip_duration_minutes", "Average Duration (Min)", False),
+                "Average Distance (Miles)": ("avg_trip_distance", "Average Distance (Miles)", False),
             }
 
             metric_col, metric_label, use_log_scale = metric_config[map_metric]
@@ -881,30 +864,45 @@ with tab_overview:
                 if use_log_scale:
                     geomap_data["map_color_value"] = np.log1p(geomap_data["display_value"])
                     color_bar_title = f"Log({color_bar_title})"
+
+                    max_val = geomap_data["display_value"].max()
+                    min_val = max(geomap_data["display_value"].min(), 1)  # avoid log(0)
+
+                    # Update the ticxbox into exponential
+                    log_min = np.floor(np.log10(min_val))
+                    log_max = np.ceil(np.log10(max_val))
+                    original_ticks = np.logspace(log_min, log_max, num=6)
+                    original_ticks = np.clip(original_ticks, min_val, max_val)
+
+                    tick_vals = np.log1p(original_ticks)
+                    tick_text = [f"{v:,.0f}" for v in original_ticks]
                 else:
                     geomap_data["map_color_value"] = geomap_data["display_value"]
 
                 try:
-                    fig_map = px.choropleth_mapbox(
+                    hover_data = {
+                        "map_id": False,
+                        "map_color_value": False,
+                        "pickup_zone": "pickup_zone" in geomap_data.columns,
+                        "pickup_borough": "pickup_borough" in geomap_data.columns,
+                        f"{metric_col}": ":," if metric_col == "total_trips" else ":,.2f",
+                        # f"{metric_col}": False if metric_col == "total_trips" else ":,",
+                    }
+
+                    
+                    fig_map = px.choropleth_map(
                         geomap_data,
                         geojson=taxi_zones_geojson,
                         featureidkey="properties.LocationID",
                         locations="map_id",
                         color="map_color_value",
                         color_continuous_scale="Viridis",
-                        mapbox_style="carto-darkmatter",
+                        map_style="carto-darkmatter",
                         zoom=9,
                         center={"lat": 40.7128, "lon": -74.0060},
                         opacity=0.72,
                         hover_name=hover_title,
-                        hover_data={
-                            "map_id": False,
-                            "pickup_zone": "pickup_zone" in geomap_data.columns,
-                            "pickup_borough": "pickup_borough" in geomap_data.columns,
-                            "display_value": ":,.2f",
-                            "map_color_value": False,
-                            "total_trips": ":,",
-                        },
+                        hover_data=hover_data,
                         labels={
                             "display_value": metric_label,
                             "map_color_value": color_bar_title,
@@ -921,15 +919,18 @@ with tab_overview:
                             tickfont=dict(color="#e5e7eb"),
                         ),
                     )
+                    
+                    if use_log_scale:
+                        fig_map.update_coloraxes(
+                            colorbar=dict(tickvals=tick_vals, ticktext=tick_text)
+                        )
 
-                    st.plotly_chart(fig_map, use_container_width=True)
+                    st.plotly_chart(fig_map, width='stretch')
                 except Exception as error:
                     st.error(f"Gagal merender peta: {error}")
 
 
-# ============================================================
-# TAB 2: WEATHER IMPACT
-# ============================================================
+# --- WEATHER IMPACT ---
 
 with tab_weather:
     st.subheader("Weather Impact Analysis")
@@ -949,10 +950,11 @@ with tab_weather:
     if weather_display.empty:
         st.warning("Tidak ada data weather impact untuk filter cuaca yang dipilih.")
     else:
-        col1, col2, col3 = st.columns(3)
+        col1, col2, col3, col4 = st.columns(4)
 
         best_condition = weather_display.sort_values("demand_lift_pct", ascending=False).iloc[0]
         highest_duration = weather_display.sort_values("duration_delta_minutes", ascending=False).iloc[0]
+        highest_fare = weather_display.sort_values("fare_delta_amount", ascending=False).iloc[0]
         highest_volume_condition = weather_display.sort_values("total_trips", ascending=False).iloc[0]
 
         col1.metric(
@@ -966,7 +968,12 @@ with tab_weather:
             f"{highest_duration['duration_delta_minutes']:.2f} min",
         )
         col3.metric(
-            "Largest Trip Volume",
+            "Highest Fare Amount Impact",
+            str(highest_fare["weather_condition"]),
+            f"{highest_fare['fare_delta_amount']:.2f} USD",
+        )
+        col4.metric(
+            "Largest Total Trips",
             str(highest_volume_condition["weather_condition"]),
             format_number(highest_volume_condition["total_trips"]),
         )
@@ -984,12 +991,14 @@ with tab_weather:
         )
 
         st.divider()
+        
+        weather_display_without_clear = weather_display[weather_display["weather_condition"] != "clear"].copy()
 
-        col_left, col_right = st.columns(2)
+        col_left, col_middle, col_right = st.columns(3)
 
         with col_left:
             fig_lift = px.bar(
-                weather_display,
+                weather_display_without_clear,
                 x="weather_condition",
                 y="demand_lift_pct",
                 title="Demand Lift by Weather Condition",
@@ -1002,11 +1011,28 @@ with tab_weather:
                 xaxis_title="Weather Condition",
                 yaxis_title="Demand Lift (%)",
             )
-            st.plotly_chart(update_chart_layout(fig_lift, height=430), use_container_width=True)
+            st.plotly_chart(update_chart_layout(fig_lift, height=430), width='stretch')
+            
+        with col_middle:
+            fig_fare_amount = px.bar(
+                weather_display_without_clear,
+                x="weather_condition",
+                y="fare_delta_amount",
+                title="Fare Amount by Weather Condition",
+                hover_data=existing_columns(
+                    weather_display,
+                    ["total_trips", "avg_duration", "avg_trip_duration_minutes"],
+                ),
+            )
+            fig_fare_amount.update_layout(
+                xaxis_title="Weather Condition",
+                yaxis_title="Fare Amount (USD)",
+            )
+            st.plotly_chart(update_chart_layout(fig_fare_amount, height=430), width='stretch')
 
         with col_right:
             fig_duration = px.bar(
-                weather_display,
+                weather_display_without_clear,
                 x="weather_condition",
                 y="duration_delta_minutes",
                 title="Duration Delta by Weather Condition",
@@ -1019,7 +1045,7 @@ with tab_weather:
                 xaxis_title="Weather Condition",
                 yaxis_title="Duration Delta (minutes)",
             )
-            st.plotly_chart(update_chart_layout(fig_duration, height=430), use_container_width=True)
+            st.plotly_chart(update_chart_layout(fig_duration, height=430), width='stretch')
 
         st.markdown("### Weather Trade-Off: Demand Lift vs Duration Impact")
 
@@ -1031,6 +1057,7 @@ with tab_weather:
             y="duration_delta_minutes",
             size=bubble_size,
             color="weather_condition",
+            color_discrete_map=WEATHER_COLOR_MAP,
             hover_name="weather_condition",
             title="Weather Impact Positioning",
             hover_data=existing_columns(
@@ -1042,7 +1069,7 @@ with tab_weather:
             xaxis_title="Demand Lift (%)",
             yaxis_title="Duration Delta (minutes)",
         )
-        st.plotly_chart(update_chart_layout(fig_tradeoff, height=460), use_container_width=True)
+        st.plotly_chart(update_chart_layout(fig_tradeoff, height=460), width='stretch')
 
         st.markdown("### Weather Impact Table")
         st.dataframe(
@@ -1064,13 +1091,11 @@ with tab_weather:
                     "avg_snowfall",
                 ],
             ),
-            use_container_width=True,
+            width='stretch',
         )
 
 
-# ============================================================
-# TAB 3: ZONE ELASTICITY
-# ============================================================
+# --- ZONE ELASTICITY ---
 
 with tab_zone:
     st.subheader("Zone Weather Elasticity")
@@ -1082,7 +1107,7 @@ with tab_zone:
     if filtered_zone_elasticity.empty:
         st.warning("Tidak ada data zone elasticity untuk filter yang dipilih.")
     else:
-        col_left, col_right = st.columns(2)
+        col_left, col_middle, col_right = st.columns(3)
 
         with col_left:
             st.markdown("### Top Demand Lift Zones")
@@ -1098,18 +1123,52 @@ with tab_zone:
                 x="demand_lift_pct",
                 y="pickup_zone",
                 color="weather_condition",
+                color_discrete_map=WEATHER_COLOR_MAP,
                 orientation="h",
                 title=f"Top {top_n} Zones by Demand Lift",
+                hover_name="pickup_zone",
                 hover_data=existing_columns(
                     top_lift,
-                    ["pickup_borough", "total_trips", "duration_delta_minutes"],
+                    ["pickup_borough", "total_trips", "demand_lift_pct"],
                 ),
             )
             fig_top_lift.update_layout(
                 xaxis_title="Demand Lift (%)",
                 yaxis_title="Pickup Zone",
+                yaxis={"categoryorder": "total ascending"},
+                
             )
-            st.plotly_chart(update_chart_layout(fig_top_lift, height=470), use_container_width=True)
+            st.plotly_chart(update_chart_layout(fig_top_lift, height=470), width='stretch')
+            
+        with col_middle:
+            st.markdown("### Top Fare Amount Impact Zones")
+
+            top_duration = (
+                filtered_zone_elasticity
+                .sort_values("fare_delta_amount", ascending=False)
+                .head(top_n)
+            )
+
+            fig_top_duration = px.bar(
+                top_duration.sort_values("fare_delta_amount", ascending=True),
+                x="fare_delta_amount",
+                y="pickup_zone",
+                color="weather_condition",
+                color_discrete_map=WEATHER_COLOR_MAP,
+                orientation="h",
+                title=f"Top {top_n} Zones by Fare Amount Impact",
+                hover_name="pickup_zone",
+                hover_data=existing_columns(
+                    top_duration,
+                    ["pickup_borough", "total_trips", "duration_delta_minutes"],
+                ),
+            )
+            fig_top_duration.update_layout(
+                xaxis_title="Fare Amount Delta (minutes)",
+                yaxis_title="Pickup Zone",
+                yaxis={"categoryorder": "total ascending"},
+            )
+            st.plotly_chart(update_chart_layout(fig_top_duration, height=470), width='stretch')
 
         with col_right:
             st.markdown("### Top Duration Impact Zones")
@@ -1125,19 +1184,217 @@ with tab_zone:
                 x="duration_delta_minutes",
                 y="pickup_zone",
                 color="weather_condition",
+                color_discrete_map=WEATHER_COLOR_MAP,
                 orientation="h",
                 title=f"Top {top_n} Zones by Duration Impact",
+                hover_name="pickup_zone",
                 hover_data=existing_columns(
                     top_duration,
-                    ["pickup_borough", "total_trips", "demand_lift_pct"],
+                    ["pickup_borough", "total_trips", "duration_delta_minutes"],
                 ),
             )
             fig_top_duration.update_layout(
                 xaxis_title="Duration Delta (minutes)",
                 yaxis_title="Pickup Zone",
+                yaxis={"categoryorder": "total ascending"},
             )
-            st.plotly_chart(update_chart_layout(fig_top_duration, height=470), use_container_width=True)
+            st.plotly_chart(update_chart_layout(fig_top_duration, height=470), width='stretch')
+        
+        st.markdown("### Zone Map — Weather Impact")
 
+        taxi_zones_geojson = read_geojson(str(TAXI_ZONES_GEOJSON_PATH))
+
+        if taxi_zones_geojson is None:
+            st.warning(
+                "File GeoJSON belum tersedia. Letakkan di `dashboard/assets/taxi_zones.geojson`."
+            )
+        elif filtered_zone_elasticity.empty:
+            st.warning("Tidak ada data zona untuk peta.")
+        elif "zone_id" not in filtered_zone_elasticity.columns:
+            st.warning("Kolom zone_id tidak tersedia.")
+        else:
+            map_col1, map_col2, map_col3 = st.columns(3)
+
+            with map_col1:
+                available_weathers = [
+                    w for w in filtered_zone_elasticity["weather_condition"]
+                    .astype(str).unique()
+                    if w != "clear"
+                ]
+                if not available_weathers:
+                    st.warning("Tidak ada data non-clear weather untuk dianalisis.")
+                    st.stop()
+
+                ordered_weathers = [w for w in WEATHER_ORDER if w in available_weathers]
+
+                selected_map_weather = st.selectbox(
+                    "Weather Condition",
+                    ordered_weathers,
+                    index=len(ordered_weathers) - 1 if "heavy_rain" not in ordered_weathers
+                          else ordered_weathers.index("heavy_rain"),  # default to heavy_rain
+                    key="map_weather_selector",
+                )
+
+            with map_col2:
+                map_metric = st.selectbox(
+                    "Impact Metric",
+                    [
+                        "Demand Lift (%)",
+                        "Duration Delta (min)",
+                        "Fare Delta (USD)",
+                        "Tip Delta (%)",
+                        "Total Trips",
+                    ],
+                    key="map_metric_selector",
+                )
+
+            with map_col3:
+                map_level = st.selectbox(
+                    "Aggregation Level",
+                    ["Per Zone", "Per Borough"],
+                    key="map_level_selector",
+                )
+
+            metric_config = {
+                "Demand Lift (%)":      ("demand_lift_pct",         "Demand Lift (%)",       False, True,  "mean"),
+                "Duration Delta (min)": ("duration_delta_minutes",  "Duration Delta (min)",  False, True,  "mean"),
+                "Fare Delta (USD)":     ("fare_delta_amount",       "Fare Delta (USD)",      False, True,  "mean"),
+                "Tip Delta (%)":        ("tip_delta_pct",           "Tip Delta (%)",         False, True,  "mean"),
+                "Total Trips":          ("total_trips",             "Total Trips",           True,  False, "sum"),
+            }
+
+            metric_col, metric_label, use_log_scale, is_diverging, agg_func = metric_config[map_metric]
+
+            geomap_data = filtered_zone_elasticity[
+                filtered_zone_elasticity["weather_condition"].astype(str) == selected_map_weather
+            ].copy()
+
+            if geomap_data.empty:
+                st.warning(f"Tidak ada data untuk weather {selected_map_weather} pada filter ini.")
+                st.stop()
+
+            if metric_col not in geomap_data.columns:
+                st.warning(f"Kolom `{metric_col}` tidak tersedia.")
+                st.stop()
+
+            # Clean and normalize IDs
+            geomap_data["map_id"] = normalize_location_id_series(geomap_data["zone_id"])
+            geomap_data = geomap_data.dropna(subset=["map_id"])
+            geomap_data[metric_col] = pd.to_numeric(geomap_data[metric_col], errors="coerce")
+            geomap_data = geomap_data.dropna(subset=[metric_col])
+
+            if map_level == "Per Borough":
+                if "pickup_borough" not in geomap_data.columns:
+                    st.warning("Kolom pickup_borough tidak tersedia.")
+                    st.stop()
+
+                borough_agg = (
+                    geomap_data.groupby("pickup_borough")[metric_col]
+                    .agg(agg_func)
+                    .reset_index()
+                    .rename(columns={metric_col: "display_value"})
+                )
+                geomap_data = geomap_data.merge(borough_agg, on="pickup_borough", how="left")
+                hover_title = "pickup_borough"
+            else:
+                geomap_data["display_value"] = geomap_data[metric_col]
+                hover_title = "pickup_zone" if "pickup_zone" in geomap_data.columns else "map_id"
+
+            if use_log_scale:
+                geomap_data["map_color_value"] = np.log1p(geomap_data["display_value"].clip(lower=0))
+                color_scale = "Viridis"
+                color_midpoint = None
+
+                # Log colorbar ticks (show real numbers)
+                max_val = geomap_data["display_value"].max()
+                min_val = max(geomap_data["display_value"].min(), 1)
+                log_min = np.floor(np.log10(min_val))
+                log_max = np.ceil(np.log10(max_val))
+                original_ticks = np.logspace(log_min, log_max, num=6)
+                tick_vals = np.log1p(original_ticks)
+                tick_text = [f"{v:,.0f}" for v in original_ticks]
+                colorbar_title = f"{metric_label} (log)"
+            else:
+                geomap_data["map_color_value"] = geomap_data["display_value"]
+                if is_diverging:
+                    color_scale = "RdBu_r"     
+                    color_midpoint = 0          
+                else:
+                    color_scale = "Viridis"
+                    color_midpoint = None
+                tick_vals, tick_text = None, None
+                colorbar_title = metric_label
+
+            hover_columns = {
+                "map_id": False,
+                "map_color_value": False,
+                "display_value": False,
+                "pickup_zone": "pickup_zone" in geomap_data.columns,
+                "pickup_borough": "pickup_borough" in geomap_data.columns,
+                "weather_condition": False,  
+            }
+
+            complementary_cols = {
+                "demand_lift_pct": ":.2f",
+                "duration_delta_minutes": ":.2f",
+                "fare_delta_amount": ":.2f",
+                "tip_delta_pct": ":.2f",
+                "total_trips": ":,",
+            }
+            for col, fmt in complementary_cols.items():
+                if col in geomap_data.columns:
+                    hover_columns[col] = fmt
+
+            try:
+                fig_map = px.choropleth_map(
+                    geomap_data,
+                    geojson=taxi_zones_geojson,
+                    featureidkey="properties.LocationID",
+                    locations="map_id",
+                    color="map_color_value",
+                    color_continuous_scale=color_scale,
+                    color_continuous_midpoint=color_midpoint,
+                    map_style="carto-darkmatter",
+                    zoom=9,
+                    center={"lat": 40.7128, "lon": -74.0060},
+                    opacity=0.75,
+                    hover_name=hover_title,
+                    hover_data=hover_columns,
+                    labels={"map_color_value": colorbar_title},
+                )
+
+                fig_map.update_layout(
+                    margin={"r": 0, "t": 30, "l": 0, "b": 0},
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    font=dict(color="#e5e7eb"),
+                    title={
+                        "text": f"{metric_label} during {selected_map_weather.replace('_', ' ').title()} — {title_borough}",
+                        "font": {"color": "#f8fafc"},
+                    },
+                    coloraxis_colorbar=dict(
+                        title=dict(text=colorbar_title, font=dict(color="#e5e7eb")),
+                        tickfont=dict(color="#e5e7eb"),
+                    ),
+                )
+
+                if use_log_scale and tick_vals is not None:
+                    fig_map.update_coloraxes(
+                        colorbar=dict(tickvals=tick_vals, ticktext=tick_text)
+                    )
+
+                st.plotly_chart(fig_map, width='stretch')
+
+                # caption
+                if is_diverging:
+                    st.caption(
+                        f"Color scale centered at 0. **Blue** = higher than clear-weather baseline, "
+                        f"**red** = lower. Showing **{len(geomap_data)} zones** during **{selected_map_weather}**."
+                    )
+
+            except Exception as error:
+                st.error(f"Gagal merender peta: {error}")
+                st.exception(error)  # show traceback for debugging
+        
         st.markdown("### Demand Lift vs Duration Impact by Zone")
 
         size_col = "total_trips" if "total_trips" in filtered_zone_elasticity.columns else None
@@ -1171,7 +1428,7 @@ with tab_zone:
             xaxis_title="Demand Lift (%)",
             yaxis_title="Duration Delta (minutes)",
         )
-        st.plotly_chart(update_chart_layout(fig_zone_scatter, height=520), use_container_width=True)
+        st.plotly_chart(update_chart_layout(fig_zone_scatter, height=520), width='stretch')
 
         st.markdown("### Zone Elasticity Data")
         st.dataframe(
@@ -1192,13 +1449,11 @@ with tab_zone:
                     "weather_sensitivity_label",
                 ],
             ),
-            use_container_width=True,
+            width='stretch',
         )
 
 
-# ============================================================
-# TAB 4: OD FLOW
-# ============================================================
+# --- OD FLOW ---
 
 with tab_od:
     st.subheader("Origin-Destination Flow under Weather Conditions")
@@ -1235,7 +1490,8 @@ with tab_od:
                 top_routes.sort_values(trip_col, ascending=True),
                 x=trip_col,
                 y="route",
-                color="weather_condition" if "weather_condition" in top_routes.columns else None,
+                color="destination_borough",
+                color_discrete_map=BOROUGH_COLOR_MAP,
                 orientation="h",
                 title=f"Top {top_n} OD Routes",
                 hover_data=existing_columns(
@@ -1254,8 +1510,9 @@ with tab_od:
             fig_routes.update_layout(
                 xaxis_title="Trip Count",
                 yaxis_title="Route",
+                yaxis={"categoryorder": "total ascending"},
             )
-            st.plotly_chart(update_chart_layout(fig_routes, height=540), use_container_width=True)
+            st.plotly_chart(update_chart_layout(fig_routes, height=540), width='stretch')
 
             st.markdown("### OD Flow Table")
             st.dataframe(
@@ -1276,13 +1533,11 @@ with tab_od:
                         "avg_tip_pct",
                     ],
                 ),
-                use_container_width=True,
+                width='stretch',
             )
 
 
-# ============================================================
-# TAB 5: DEMAND PREDICTION
-# ============================================================
+# --- DEMAND PREDICTION ---
 
 with tab_prediction:
     st.subheader("ML Demand Prediction")
@@ -1350,7 +1605,7 @@ with tab_prediction:
                     yaxis_title="Trips",
                     hovermode="x unified",
                 )
-                st.plotly_chart(update_chart_layout(fig_prediction_daily, height=430), use_container_width=True)
+                st.plotly_chart(update_chart_layout(fig_prediction_daily, height=430), width='stretch')
             else:
                 st.warning("Kolom pickup_date tidak tersedia pada prediction results.")
 
@@ -1373,7 +1628,7 @@ with tab_prediction:
                     xaxis_title="Importance",
                     yaxis_title="Feature",
                 )
-                st.plotly_chart(update_chart_layout(fig_importance, height=430), use_container_width=True)
+                st.plotly_chart(update_chart_layout(fig_importance, height=430), width='stretch')
 
         st.markdown("### Prediction Error Analysis")
 
@@ -1387,6 +1642,7 @@ with tab_prediction:
                 x=actual_col,
                 y=predicted_col,
                 color=color_col,
+                color_discrete_map=WEATHER_COLOR_MAP,
                 title="Actual vs Predicted Trips",
                 hover_data=existing_columns(
                     filtered_demand_results,
@@ -1397,7 +1653,7 @@ with tab_prediction:
                 xaxis_title="Actual Trips",
                 yaxis_title="Predicted Trips",
             )
-            st.plotly_chart(update_chart_layout(fig_error_scatter, height=430), use_container_width=True)
+            st.plotly_chart(update_chart_layout(fig_error_scatter, height=430), width='stretch')
 
         with col_right:
             if abs_error_col is None:
@@ -1419,7 +1675,7 @@ with tab_prediction:
                 xaxis_title="Absolute Error",
                 yaxis_title="Row Count",
             )
-            st.plotly_chart(update_chart_layout(fig_error_hist, height=430), use_container_width=True)
+            st.plotly_chart(update_chart_layout(fig_error_hist, height=430), width='stretch')
 
         with st.expander("Prediction Results Sample"):
             st.dataframe(
@@ -1436,13 +1692,11 @@ with tab_prediction:
                         abs_error_col,
                     ],
                 ),
-                use_container_width=True,
+                width='stretch',
             )
 
 
-# ============================================================
-# TAB 6: ZONE CLUSTERING
-# ============================================================
+# --- ZONE CLUSTERING ---
 
 with tab_cluster:
     st.subheader("ML Zone Weather Sensitivity Clustering")
@@ -1488,7 +1742,7 @@ with tab_cluster:
                 xaxis_title="Cluster Profile",
                 yaxis_title="Zone Count",
             )
-            st.plotly_chart(update_chart_layout(fig_cluster_dist, height=430), use_container_width=True)
+            st.plotly_chart(update_chart_layout(fig_cluster_dist, height=430), width='stretch')
 
         with col_right:
             st.markdown("### Cluster Summary")
@@ -1513,7 +1767,7 @@ with tab_cluster:
                             "high_sensitive_condition_count",
                         ],
                     ),
-                    use_container_width=True,
+                    width='stretch',
                 )
 
         st.markdown("### Cluster Positioning")
@@ -1548,7 +1802,7 @@ with tab_cluster:
                 xaxis_title="Average Demand Lift (%)",
                 yaxis_title="Average Duration Delta (minutes)",
             )
-            st.plotly_chart(update_chart_layout(fig_cluster_scatter, height=520), use_container_width=True)
+            st.plotly_chart(update_chart_layout(fig_cluster_scatter, height=520), width='stretch')
 
         st.markdown("### High-Impact Zone Candidates")
 
@@ -1583,7 +1837,7 @@ with tab_cluster:
                         "avg_tip_delta_pct",
                     ],
                 ),
-                use_container_width=True,
+                width='stretch',
             )
         else:
             st.info("Tidak ada candidate high-impact zone pada filter saat ini.")
@@ -1604,12 +1858,8 @@ with tab_cluster:
                         "avg_tip_delta_pct",
                     ],
                 ),
-                use_container_width=True,
+                width='stretch',
             )
 
 
 st.divider()
-st.caption(
-    "Built with Streamlit, DuckDB, Apache Airflow, Parquet, and scikit-learn. "
-    "Pipeline period: Januaryâ€“March 2025."
-)
