@@ -41,6 +41,15 @@ BOROUGH_COLOR_MAP = {
     "EWR": "#19D3F3",
 }
 
+WEATHER_COLOR_MAP = {
+    "clear": "#636EFA",
+    "heavy_rain": "#EF553B",
+    "snow": "#00CC96",
+    "moderate_rain": "#AB63FA",
+    "light_rain": "#FFA15A",
+}
+
+
 px.defaults.template = "plotly_dark"
 
 
@@ -1043,6 +1052,7 @@ with tab_weather:
             y="duration_delta_minutes",
             size=bubble_size,
             color="weather_condition",
+            color_discrete_map=WEATHER_COLOR_MAP,
             hover_name="weather_condition",
             title="Weather Impact Positioning",
             hover_data=existing_columns(
@@ -1110,11 +1120,13 @@ with tab_zone:
                 x="demand_lift_pct",
                 y="pickup_zone",
                 color="weather_condition",
+                color_discrete_map=WEATHER_COLOR_MAP,
                 orientation="h",
                 title=f"Top {top_n} Zones by Demand Lift",
+                hover_name="pickup_zone",
                 hover_data=existing_columns(
                     top_lift,
-                    ["pickup_borough", "total_trips", "duration_delta_minutes"],
+                    ["pickup_borough", "total_trips", "demand_lift_pct"],
                 ),
             )
             fig_top_lift.update_layout(
@@ -1137,11 +1149,13 @@ with tab_zone:
                 x="duration_delta_minutes",
                 y="pickup_zone",
                 color="weather_condition",
+                color_discrete_map=WEATHER_COLOR_MAP,
                 orientation="h",
                 title=f"Top {top_n} Zones by Duration Impact",
+                hover_name="pickup_zone",
                 hover_data=existing_columns(
                     top_duration,
-                    ["pickup_borough", "total_trips", "demand_lift_pct"],
+                    ["pickup_borough", "total_trips", "duration_delta_minutes"],
                 ),
             )
             fig_top_duration.update_layout(
@@ -1248,6 +1262,7 @@ with tab_od:
                 x=trip_col,
                 y="route",
                 color="weather_condition" if "weather_condition" in top_routes.columns else None,
+                color_discrete_map=WEATHER_COLOR_MAP,
                 orientation="h",
                 title=f"Top {top_n} OD Routes",
                 hover_data=existing_columns(
@@ -1399,6 +1414,7 @@ with tab_prediction:
                 x=actual_col,
                 y=predicted_col,
                 color=color_col,
+                color_discrete_map=WEATHER_COLOR_MAP,
                 title="Actual vs Predicted Trips",
                 hover_data=existing_columns(
                     filtered_demand_results,
