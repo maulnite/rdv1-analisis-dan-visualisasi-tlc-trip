@@ -709,7 +709,7 @@ with tab_overview:
                 title="Pickup Date",
             )
 
-            st.plotly_chart(update_chart_layout(fig_daily, height=430), use_container_width=True)
+            st.plotly_chart(update_chart_layout(fig_daily, height=430), width='stretch')
 
     with col_right:
         st.markdown("### Top Pickup Zones")
@@ -743,7 +743,7 @@ with tab_overview:
                 legend_title="Borough",
             )
 
-            st.plotly_chart(update_chart_layout(fig_zone, height=430), use_container_width=True)
+            st.plotly_chart(update_chart_layout(fig_zone, height=430), width='stretch')
 
     st.markdown("### Hourly Demand Pattern")
 
@@ -806,7 +806,7 @@ with tab_overview:
             hovermode="x unified",
         )
 
-        st.plotly_chart(update_chart_layout(fig_hourly, height=440), use_container_width=True)
+        st.plotly_chart(update_chart_layout(fig_hourly, height=440), width='stretch')
 
     st.divider()
     st.markdown("### NYC Taxi Demand GeoMap")
@@ -878,14 +878,14 @@ with tab_overview:
                     geomap_data["map_color_value"] = geomap_data["display_value"]
 
                 try:
-                    fig_map = px.choropleth_mapbox(
+                    fig_map = px.choropleth_map(
                         geomap_data,
                         geojson=taxi_zones_geojson,
                         featureidkey="properties.LocationID",
                         locations="map_id",
                         color="map_color_value",
                         color_continuous_scale="Viridis",
-                        mapbox_style="carto-darkmatter",
+                        map_style="carto-darkmatter",
                         zoom=9,
                         center={"lat": 40.7128, "lon": -74.0060},
                         opacity=0.72,
@@ -915,7 +915,7 @@ with tab_overview:
                         ),
                     )
 
-                    st.plotly_chart(fig_map, use_container_width=True)
+                    st.plotly_chart(fig_map, width='stretch')
                 except Exception as error:
                     st.error(f"Gagal merender peta: {error}")
 
@@ -995,7 +995,7 @@ with tab_weather:
                 xaxis_title="Weather Condition",
                 yaxis_title="Demand Lift (%)",
             )
-            st.plotly_chart(update_chart_layout(fig_lift, height=430), use_container_width=True)
+            st.plotly_chart(update_chart_layout(fig_lift, height=430), width='stretch')
 
         with col_right:
             fig_duration = px.bar(
@@ -1012,7 +1012,7 @@ with tab_weather:
                 xaxis_title="Weather Condition",
                 yaxis_title="Duration Delta (minutes)",
             )
-            st.plotly_chart(update_chart_layout(fig_duration, height=430), use_container_width=True)
+            st.plotly_chart(update_chart_layout(fig_duration, height=430), width='stretch')
 
         st.markdown("### Weather Trade-Off: Demand Lift vs Duration Impact")
 
@@ -1035,7 +1035,7 @@ with tab_weather:
             xaxis_title="Demand Lift (%)",
             yaxis_title="Duration Delta (minutes)",
         )
-        st.plotly_chart(update_chart_layout(fig_tradeoff, height=460), use_container_width=True)
+        st.plotly_chart(update_chart_layout(fig_tradeoff, height=460), width='stretch')
 
         st.markdown("### Weather Impact Table")
         st.dataframe(
@@ -1057,7 +1057,7 @@ with tab_weather:
                     "avg_snowfall",
                 ],
             ),
-            use_container_width=True,
+            width='stretch',
         )
 
 
@@ -1102,7 +1102,7 @@ with tab_zone:
                 xaxis_title="Demand Lift (%)",
                 yaxis_title="Pickup Zone",
             )
-            st.plotly_chart(update_chart_layout(fig_top_lift, height=470), use_container_width=True)
+            st.plotly_chart(update_chart_layout(fig_top_lift, height=470), width='stretch')
 
         with col_right:
             st.markdown("### Top Duration Impact Zones")
@@ -1129,7 +1129,7 @@ with tab_zone:
                 xaxis_title="Duration Delta (minutes)",
                 yaxis_title="Pickup Zone",
             )
-            st.plotly_chart(update_chart_layout(fig_top_duration, height=470), use_container_width=True)
+            st.plotly_chart(update_chart_layout(fig_top_duration, height=470), width='stretch')
 
         st.markdown("### Demand Lift vs Duration Impact by Zone")
 
@@ -1164,7 +1164,7 @@ with tab_zone:
             xaxis_title="Demand Lift (%)",
             yaxis_title="Duration Delta (minutes)",
         )
-        st.plotly_chart(update_chart_layout(fig_zone_scatter, height=520), use_container_width=True)
+        st.plotly_chart(update_chart_layout(fig_zone_scatter, height=520), width='stretch')
 
         st.markdown("### Zone Elasticity Data")
         st.dataframe(
@@ -1185,7 +1185,7 @@ with tab_zone:
                     "weather_sensitivity_label",
                 ],
             ),
-            use_container_width=True,
+            width='stretch',
         )
 
 
@@ -1248,7 +1248,7 @@ with tab_od:
                 xaxis_title="Trip Count",
                 yaxis_title="Route",
             )
-            st.plotly_chart(update_chart_layout(fig_routes, height=540), use_container_width=True)
+            st.plotly_chart(update_chart_layout(fig_routes, height=540), width='stretch')
 
             st.markdown("### OD Flow Table")
             st.dataframe(
@@ -1269,7 +1269,7 @@ with tab_od:
                         "avg_tip_pct",
                     ],
                 ),
-                use_container_width=True,
+                width='stretch',
             )
 
 
@@ -1343,7 +1343,7 @@ with tab_prediction:
                     yaxis_title="Trips",
                     hovermode="x unified",
                 )
-                st.plotly_chart(update_chart_layout(fig_prediction_daily, height=430), use_container_width=True)
+                st.plotly_chart(update_chart_layout(fig_prediction_daily, height=430), width='stretch')
             else:
                 st.warning("Kolom pickup_date tidak tersedia pada prediction results.")
 
@@ -1366,7 +1366,7 @@ with tab_prediction:
                     xaxis_title="Importance",
                     yaxis_title="Feature",
                 )
-                st.plotly_chart(update_chart_layout(fig_importance, height=430), use_container_width=True)
+                st.plotly_chart(update_chart_layout(fig_importance, height=430), width='stretch')
 
         st.markdown("### Prediction Error Analysis")
 
@@ -1390,7 +1390,7 @@ with tab_prediction:
                 xaxis_title="Actual Trips",
                 yaxis_title="Predicted Trips",
             )
-            st.plotly_chart(update_chart_layout(fig_error_scatter, height=430), use_container_width=True)
+            st.plotly_chart(update_chart_layout(fig_error_scatter, height=430), width='stretch')
 
         with col_right:
             if abs_error_col is None:
@@ -1412,7 +1412,7 @@ with tab_prediction:
                 xaxis_title="Absolute Error",
                 yaxis_title="Row Count",
             )
-            st.plotly_chart(update_chart_layout(fig_error_hist, height=430), use_container_width=True)
+            st.plotly_chart(update_chart_layout(fig_error_hist, height=430), width='stretch')
 
         with st.expander("Prediction Results Sample"):
             st.dataframe(
@@ -1429,7 +1429,7 @@ with tab_prediction:
                         abs_error_col,
                     ],
                 ),
-                use_container_width=True,
+                width='stretch',
             )
 
 
@@ -1481,7 +1481,7 @@ with tab_cluster:
                 xaxis_title="Cluster Profile",
                 yaxis_title="Zone Count",
             )
-            st.plotly_chart(update_chart_layout(fig_cluster_dist, height=430), use_container_width=True)
+            st.plotly_chart(update_chart_layout(fig_cluster_dist, height=430), width='stretch')
 
         with col_right:
             st.markdown("### Cluster Summary")
@@ -1506,7 +1506,7 @@ with tab_cluster:
                             "high_sensitive_condition_count",
                         ],
                     ),
-                    use_container_width=True,
+                    width='stretch',
                 )
 
         st.markdown("### Cluster Positioning")
@@ -1541,7 +1541,7 @@ with tab_cluster:
                 xaxis_title="Average Demand Lift (%)",
                 yaxis_title="Average Duration Delta (minutes)",
             )
-            st.plotly_chart(update_chart_layout(fig_cluster_scatter, height=520), use_container_width=True)
+            st.plotly_chart(update_chart_layout(fig_cluster_scatter, height=520), width='stretch')
 
         st.markdown("### High-Impact Zone Candidates")
 
@@ -1576,7 +1576,7 @@ with tab_cluster:
                         "avg_tip_delta_pct",
                     ],
                 ),
-                use_container_width=True,
+                width='stretch',
             )
         else:
             st.info("Tidak ada candidate high-impact zone pada filter saat ini.")
@@ -1597,7 +1597,7 @@ with tab_cluster:
                         "avg_tip_delta_pct",
                     ],
                 ),
-                use_container_width=True,
+                width='stretch',
             )
 
 
