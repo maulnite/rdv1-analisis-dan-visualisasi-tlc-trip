@@ -1,3 +1,10 @@
+﻿# /*
+#  * 245150200111028 Aditya Akbar
+#  * 245150207111038 Mohammad Geisar Rampan
+#  * 245150207111103 Muhammad Sulthon Aulia Wijaya
+#  * 245150207111050 Orie Abyan Maulana
+#  * 235150201111068 Pieter Christy Yan Yudhistira
+#  */
 from pathlib import Path
 import json
 
@@ -16,7 +23,7 @@ import streamlit as st
 
 st.set_page_config(
     page_title="NYC TLC Weather Analytics",
-    page_icon="🚕",
+    page_icon="ðŸš•",
     layout="wide",
 )
 
@@ -460,12 +467,12 @@ od_flow_df = apply_weather_order(od_flow_df)
 # ============================================================
 
 st.markdown(
-    '<div class="main-title">🚕 NYC TLC Weather Analytics & ML Dashboard</div>',
+    '<div class="main-title">ðŸš• NYC TLC Weather Analytics & ML Dashboard</div>',
     unsafe_allow_html=True,
 )
 
 st.markdown(
-    '<div class="subtitle">Analisis pengaruh cuaca terhadap demand, durasi perjalanan, zona sensitif cuaca, OD flow, dan prediksi demand taksi NYC Yellow Taxi periode Januari–Maret 2025.</div>',
+    '<div class="subtitle">Analisis pengaruh cuaca terhadap demand, durasi perjalanan, zona sensitif cuaca, OD flow, dan prediksi demand taksi NYC Yellow Taxi periode Januariâ€“Maret 2025.</div>',
     unsafe_allow_html=True,
 )
 
@@ -581,12 +588,12 @@ filtered_zone_summary_from_weather = build_zone_summary_from_hourly(
 
 tab_overview, tab_weather, tab_zone, tab_od, tab_prediction, tab_cluster = st.tabs(
     [
-        "📌 Executive Overview",
-        "🌧️ Weather Impact",
-        "📍 Zone Elasticity",
-        "🔁 OD Flow",
-        "🤖 Demand Prediction",
-        "🧩 Zone Clustering",
+        "ðŸ“Œ Executive Overview",
+        "ðŸŒ§ï¸ Weather Impact",
+        "ðŸ“ Zone Elasticity",
+        "ðŸ” OD Flow",
+        "ðŸ¤– Demand Prediction",
+        "ðŸ§© Zone Clustering",
     ]
 )
 
@@ -1214,7 +1221,7 @@ with tab_od:
         else:
             od_display["route"] = (
                 od_display[origin_col].astype(str)
-                + " → "
+                + " â†’ "
                 + od_display[dest_col].astype(str)
             )
 
@@ -1298,7 +1305,7 @@ with tab_prediction:
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("MAE", f"{mae:.2f}", delta=f"Baseline {baseline_mae:.2f}", delta_color="inverse")
     col2.metric("RMSE", f"{rmse:.2f}", delta=f"Baseline {baseline_rmse:.2f}", delta_color="inverse")
-    col3.metric("R²", f"{r2:.3f}")
+    col3.metric("RÂ²", f"{r2:.3f}")
     col4.metric("MAPE", f"{mape:.2f}%")
 
     st.divider()
@@ -1604,5 +1611,5 @@ with tab_cluster:
 st.divider()
 st.caption(
     "Built with Streamlit, DuckDB, Apache Airflow, Parquet, and scikit-learn. "
-    "Pipeline period: January–March 2025."
+    "Pipeline period: Januaryâ€“March 2025."
 )

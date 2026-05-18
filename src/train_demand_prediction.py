@@ -1,3 +1,10 @@
+﻿# /*
+#  * 245150200111028 Aditya Akbar
+#  * 245150207111038 Mohammad Geisar Rampan
+#  * 245150207111103 Muhammad Sulthon Aulia Wijaya
+#  * 245150207111050 Orie Abyan Maulana
+#  * 235150201111068 Pieter Christy Yan Yudhistira
+#  */
 from pathlib import Path
 from typing import Iterable
 import json
