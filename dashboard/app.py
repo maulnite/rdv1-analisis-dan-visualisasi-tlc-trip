@@ -521,7 +521,7 @@ active_weather_conditions = selected_weather if selected_weather else weather_op
 top_n = st.sidebar.slider(
     "Top N",
     min_value=5,
-    max_value=30,
+    max_value=100,
     value=10,
     step=5,
 )
