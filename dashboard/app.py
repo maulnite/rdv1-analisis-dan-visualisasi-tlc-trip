@@ -10,9 +10,7 @@ from plotly.subplots import make_subplots
 import streamlit as st
 
 
-# ============================================================
-# PAGE CONFIG
-# ============================================================
+# Config
 
 st.set_page_config(
     page_title="NYC TLC Weather Analytics",
@@ -53,9 +51,7 @@ WEATHER_COLOR_MAP = {
 px.defaults.template = "plotly_dark"
 
 
-# ============================================================
-# STYLING
-# ============================================================
+# Style 
 
 st.markdown(
     """
@@ -155,9 +151,7 @@ st.markdown(
 )
 
 
-# ============================================================
-# HELPER FUNCTIONS
-# ============================================================
+# Utils Functions
 
 def file_must_exist(path: Path) -> Path:
     if not path.exists() or path.stat().st_size == 0:
@@ -426,9 +420,7 @@ def get_prediction_columns(df: pd.DataFrame) -> tuple[str | None, str | None, st
     return actual_col, predicted_col, abs_error_col
 
 
-# ============================================================
-# LOAD DATA
-# ============================================================
+# Loading Data
 
 daily_df = read_parquet(str(CURATED_DIR / f"agg_daily_summary_{PERIOD}.parquet"))
 zone_df = read_parquet(str(CURATED_DIR / f"agg_zone_summary_{PERIOD}.parquet"))
@@ -447,9 +439,7 @@ zone_clusters_df = read_parquet(str(ML_DIR / f"zone_weather_clusters_{PERIOD}.pa
 cluster_summary = read_json(str(ML_DIR / f"zone_cluster_summary_{PERIOD}.json"))
 
 
-# ============================================================
-# BASIC DATA PREP
-# ============================================================
+# Data Prep
 
 for df in [daily_df, weather_hourly_df, demand_results_df]:
     if "pickup_date" in df.columns:
@@ -464,9 +454,7 @@ zone_elasticity_df = apply_weather_order(zone_elasticity_df)
 od_flow_df = apply_weather_order(od_flow_df)
 
 
-# ============================================================
-# HEADER
-# ============================================================
+# Header
 
 st.markdown(
     '<div class="main-title">🚕 NYC TLC Weather Analytics & ML Dashboard</div>',
@@ -484,9 +472,7 @@ st.caption(
 )
 
 
-# ============================================================
-# SIDEBAR FILTERS
-# ============================================================
+# Sidebar
 
 st.sidebar.title("Dashboard Filters")
 
@@ -545,10 +531,7 @@ days = st.sidebar.selectbox(
 title_borough = "All Boroughs" if selected_borough == "All" else selected_borough
 
 
-# ============================================================
-# FILTERED DATASETS
-# ============================================================
-
+# Filter
 filtered_zone_elasticity = zone_elasticity_df.copy()
 filtered_od_flow = od_flow_df.copy()
 filtered_clusters = zone_clusters_df.copy()
@@ -584,10 +567,7 @@ filtered_zone_summary_from_weather = build_zone_summary_from_hourly(
 )
 
 
-# ============================================================
-# TABS
-# ============================================================
-
+# Tabs
 tab_overview, tab_weather, tab_zone, tab_od, tab_prediction, tab_cluster = st.tabs(
     [
         "📌 Executive Overview",
@@ -600,9 +580,7 @@ tab_overview, tab_weather, tab_zone, tab_od, tab_prediction, tab_cluster = st.ta
 )
 
 
-# ============================================================
-# TAB 1: EXECUTIVE OVERVIEW
-# ============================================================
+# --- EXECUTIVE OVERVIEW ---
 
 with tab_overview:
     st.subheader("Executive Overview")
@@ -820,10 +798,6 @@ with tab_overview:
 
     st.divider()
     st.markdown("### NYC Taxi Demand GeoMap")
-    # st.markdown(
-    #     '<div class="section-note">Peta choropleth menggunakan file lokal <code>dashboard/assets/taxi_zones.geojson</code>. Data metrik tetap berasal dari hasil pipeline.</div>',
-    #     unsafe_allow_html=True,
-    # )
 
     taxi_zones_geojson = read_geojson(str(TAXI_ZONES_GEOJSON_PATH))
 
@@ -949,9 +923,7 @@ with tab_overview:
                     st.error(f"Gagal merender peta: {error}")
 
 
-# ============================================================
-# TAB 2: WEATHER IMPACT
-# ============================================================
+# --- WEATHER IMPACT ---
 
 with tab_weather:
     st.subheader("Weather Impact Analysis")
@@ -1116,9 +1088,7 @@ with tab_weather:
         )
 
 
-# ============================================================
-# TAB 3: ZONE ELASTICITY
-# ============================================================
+# --- ZONE ELASTICITY ---
 
 with tab_zone:
     st.subheader("Zone Weather Elasticity")
@@ -1239,7 +1209,6 @@ with tab_zone:
             map_col1, map_col2, map_col3 = st.columns(3)
 
             with map_col1:
-                # Available weather conditions (exclude clear — it's the baseline, delta ≈ 0)
                 available_weathers = [
                     w for w in filtered_zone_elasticity["weather_condition"]
                     .astype(str).unique()
@@ -1249,7 +1218,6 @@ with tab_zone:
                     st.warning("Tidak ada data non-clear weather untuk dianalisis.")
                     st.stop()
 
-                # Order them sensibly
                 ordered_weathers = [w for w in WEATHER_ORDER if w in available_weathers]
 
                 selected_map_weather = st.selectbox(
@@ -1280,10 +1248,6 @@ with tab_zone:
                     key="map_level_selector",
                 )
 
-            # ============================================================
-            # METRIC CONFIG
-            # ============================================================
-            # (column, label, use_log_scale, diverging_scale, aggregation_func)
             metric_config = {
                 "Demand Lift (%)":      ("demand_lift_pct",         "Demand Lift (%)",       False, True,  "mean"),
                 "Duration Delta (min)": ("duration_delta_minutes",  "Duration Delta (min)",  False, True,  "mean"),
@@ -1294,9 +1258,6 @@ with tab_zone:
 
             metric_col, metric_label, use_log_scale, is_diverging, agg_func = metric_config[map_metric]
 
-            # ============================================================
-            # FILTER TO ONE WEATHER CONDITION → one row per zone
-            # ============================================================
             geomap_data = filtered_zone_elasticity[
                 filtered_zone_elasticity["weather_condition"].astype(str) == selected_map_weather
             ].copy()
@@ -1315,16 +1276,11 @@ with tab_zone:
             geomap_data[metric_col] = pd.to_numeric(geomap_data[metric_col], errors="coerce")
             geomap_data = geomap_data.dropna(subset=[metric_col])
 
-            # ============================================================
-            # BOROUGH AGGREGATION (if requested)
-            # ============================================================
             if map_level == "Per Borough":
                 if "pickup_borough" not in geomap_data.columns:
                     st.warning("Kolom pickup_borough tidak tersedia.")
                     st.stop()
 
-                # Aggregate metric per borough, then broadcast back to each zone
-                # (this keeps zone-level GeoJSON polygons but colors them by borough value)
                 borough_agg = (
                     geomap_data.groupby("pickup_borough")[metric_col]
                     .agg(agg_func)
@@ -1337,9 +1293,6 @@ with tab_zone:
                 geomap_data["display_value"] = geomap_data[metric_col]
                 hover_title = "pickup_zone" if "pickup_zone" in geomap_data.columns else "map_id"
 
-            # ============================================================
-            # COLOR SCALE CONFIG
-            # ============================================================
             if use_log_scale:
                 geomap_data["map_color_value"] = np.log1p(geomap_data["display_value"].clip(lower=0))
                 color_scale = "Viridis"
@@ -1357,27 +1310,23 @@ with tab_zone:
             else:
                 geomap_data["map_color_value"] = geomap_data["display_value"]
                 if is_diverging:
-                    color_scale = "RdBu_r"     # red = negative impact, blue = positive
-                    color_midpoint = 0          # CENTER on zero — critical for delta metrics
+                    color_scale = "RdBu_r"     
+                    color_midpoint = 0          
                 else:
                     color_scale = "Viridis"
                     color_midpoint = None
                 tick_vals, tick_text = None, None
                 colorbar_title = metric_label
 
-            # ============================================================
-            # BUILD HOVER DATA — show context columns
-            # ============================================================
             hover_columns = {
                 "map_id": False,
                 "map_color_value": False,
                 "display_value": False,
                 "pickup_zone": "pickup_zone" in geomap_data.columns,
                 "pickup_borough": "pickup_borough" in geomap_data.columns,
-                "weather_condition": False,  # already in title
+                "weather_condition": False,  
             }
 
-            # Surface the actual metric + complementary metrics
             complementary_cols = {
                 "demand_lift_pct": ":.2f",
                 "duration_delta_minutes": ":.2f",
@@ -1389,9 +1338,6 @@ with tab_zone:
                 if col in geomap_data.columns:
                     hover_columns[col] = fmt
 
-            # ============================================================
-            # RENDER MAP
-            # ============================================================
             try:
                 fig_map = px.choropleth_map(
                     geomap_data,
@@ -1429,9 +1375,9 @@ with tab_zone:
                         colorbar=dict(tickvals=tick_vals, ticktext=tick_text)
                     )
 
-                st.plotly_chart(fig_map, use_container_width=True)
+                st.plotly_chart(fig_map, width='content')
 
-                # Helpful caption
+                # caption
                 if is_diverging:
                     st.caption(
                         f"Color scale centered at 0. **Blue** = higher than clear-weather baseline, "
@@ -1500,9 +1446,7 @@ with tab_zone:
         )
 
 
-# ============================================================
-# TAB 4: OD FLOW
-# ============================================================
+# --- OD FLOW ---
 
 with tab_od:
     st.subheader("Origin-Destination Flow under Weather Conditions")
@@ -1586,9 +1530,7 @@ with tab_od:
             )
 
 
-# ============================================================
-# TAB 5: DEMAND PREDICTION
-# ============================================================
+# --- DEMAND PREDICTION ---
 
 with tab_prediction:
     st.subheader("ML Demand Prediction")
@@ -1747,9 +1689,7 @@ with tab_prediction:
             )
 
 
-# ============================================================
-# TAB 6: ZONE CLUSTERING
-# ============================================================
+# --- ZONE CLUSTERING ---
 
 with tab_cluster:
     st.subheader("ML Zone Weather Sensitivity Clustering")
